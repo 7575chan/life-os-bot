@@ -6,6 +6,7 @@ import claude_client
 import notes
 import sheets
 import state
+import task_dates
 import task_sync
 import util
 import vault_paths
@@ -21,7 +22,7 @@ _PROMPT = """次は、ユーザーが夜の振り返りとして投稿した文�
 {{
   "mood": ご機嫌度（1〜5の整数）。文章に書かれていなければ null,
   "formatted": 読みやすく整えた日記本文。元の意図を変えず、評価・助言・説教・励ましを足さない。箇条書きにしてよい,
-  "tomorrow_tasks": 「明日〜する」など、文章に明示されている翌日のやることだけの配列。推測で作らない。無ければ空配列,
+  "tomorrow_tasks": 「明日〜する」など、文章に明示されているこれからのやることだけの配列。推測で作らない。無ければ空配列。「明日」「9/25」「〜まで」など日付の言葉は、投稿にあるとおりに文中へ残す,
   "wants_x": 「Xのポスト案」を明示的に求めているか（true/false）,
   "wants_note": 「noteのネタ」を明示的に求めているか（true/false）
 }}
@@ -114,11 +115,18 @@ async def _journal(message, text: str) -> None:
     link = await asyncio.to_thread(notes.get_store().append_entry, vault_paths.diary(day), entry, day)
     await asyncio.to_thread(sheets.append, sheets.DIARY, {"日付": day, "ご機嫌度": mood or "", "天気": w,
                                                           "本文": formatted, "Obsidianリンク": link})
+    dated = []
     for t in tomorrow:
-        await asyncio.to_thread(sheets.add_task, t, source=SOURCE)
+        ext = task_dates.extract(t, now.date())  # 「明日」「9/25まで」などが書かれていれば、実行日・期限に反映する
+        await asyncio.to_thread(sheets.add_task, ext.content, scheduled=task_dates.iso(ext.scheduled),
+                                due=task_dates.iso(ext.due), source=SOURCE)
+        if ext.scheduled or ext.due:
+            dated.append(f"・{ext.content}（{task_dates.describe(ext.scheduled, ext.due)}）")
     await util.ack(message, "🌙")
 
     replies = ["今日の記録を残しました。おつかれさまでした🌙"]
+    if dated:
+        replies.append("📌 日付を設定しました：\n" + "\n".join(dated))
     if parsed.get("wants_x"):
         replies.append("【Xのポスト案】\n" + await claude_client.complete(
             f"次の出来事や気持ちから、Xのポスト案を3つ、各140字以内で作ってください。\n\n{formatted}", max_tokens=700))

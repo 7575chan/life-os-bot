@@ -140,7 +140,7 @@ def test_action_item_is_linked_to_backlog(env):
     env.ai = lambda t: {"tags": ["日常"], "task": "牛乳を買う"}
     m = Msg("牛乳を買う。あと小説の設定も考えたい")
     run(idea.handle(m))
-    assert env.tasks == [("牛乳を買う", {"source": "09-idea"})]  # 実行予定日なし＝バックログ
+    assert env.tasks == [("牛乳を買う", {"scheduled": "", "due": "", "source": "09-idea"})]  # 実行予定日なし＝バックログ
     assert env.syncs == [1] and m.reactions == ["📝", "📋"]
     assert "牛乳を買う" in env.ideas()  # メモとしても残る
     assert m.channel.sent == []

@@ -7,6 +7,7 @@ import functools
 import logging
 import re
 import threading
+import time
 import uuid
 from datetime import date, timedelta
 
@@ -72,9 +73,10 @@ def locked(fn):
 
 
 def client():
+    """BackOffHTTPClient: 読み取り上限（1分あたり60回）に達して 429 が返ったとき、待ってから自動でやり直す。"""
     global _gc
     if _gc is None:
-        _gc = gspread.service_account(filename=config.CREDENTIALS_FILE)
+        _gc = gspread.service_account(filename=config.CREDENTIALS_FILE, http_client=gspread.BackOffHTTPClient)
     return _gc
 
 
@@ -85,8 +87,36 @@ def book():
     return _book
 
 
+# Sheets API の読み取り上限（1分あたり60回。VM の Bot・手元の作業・同期が同じ枠を共有する）を守るため、
+# タブの情報（毎回1回の読み取りになる）と見出し行は、しばらく覚えておく。
+_WS_TTL = 3600.0
+_HEADER_TTL = 300.0
+_ws_cache: dict[str, tuple[float, object]] = {}
+_header_cache: dict[str, tuple[float, list[str]]] = {}
+
+
 def ws(name: str):
-    return book().worksheet(name)
+    hit = _ws_cache.get(name)
+    if hit and time.time() - hit[0] < _WS_TTL:
+        return hit[1]
+    w = book().worksheet(name)
+    _ws_cache[name] = (time.time(), w)
+    return w
+
+
+def _header(name: str, refresh: bool = False) -> list[str]:
+    """見出し行（シートを開いて確認した列名）。ユーザーが列を足したときのため、5分で入れ替える。"""
+    hit = _header_cache.get(name)
+    if hit and not refresh and time.time() - hit[0] < _HEADER_TTL:
+        return hit[1]
+    header = ws(name).row_values(1)
+    _header_cache[name] = (time.time(), header)
+    return header
+
+
+def clear_caches() -> None:
+    _ws_cache.clear()
+    _header_cache.clear()
 
 
 # ---------------------------------------------------------------- 見出し行（SPEC §3.2 ルール）
@@ -116,6 +146,7 @@ def ensure_schema() -> dict:
 
     戻り値: {"created": [...], "headers_written": [...], "columns_added": {...}, "refused": [...]}
     """
+    clear_caches()
     existing = {w.title: w for w in book().worksheets()}
     result = {"created": [], "headers_written": [], "columns_added": {}, "refused": []}
     for name, cols in SCHEMA.items():
@@ -180,7 +211,9 @@ def records(name: str) -> list[tuple[int, dict]]:
 def append(name: str, data: dict) -> int:
     """1行追記して行番号を返す。見出し行の列順に合わせる。"""
     _require(name)
-    header = ws(name).row_values(1)
+    header = _header(name)
+    if any(k not in header for k in data):
+        header = _header(name, refresh=True)
     row = [""] * len(header)
     for k, v in data.items():
         if k in header:
@@ -193,7 +226,9 @@ def append(name: str, data: dict) -> int:
 @locked
 def update_row(name: str, row: int, data: dict) -> None:
     _require(name)
-    header = ws(name).row_values(1)
+    header = _header(name)
+    if any(k not in header for k in data):
+        header = _header(name, refresh=True)
     for k in data:
         if k not in header:
             raise KeyError(f"{name} に列 '{k}' はありません。列: {header}")
@@ -238,7 +273,7 @@ _TASK_COLUMNS = {  # タスク dict のキー -> シートの列名
 
 def new_task_id(existing: set[str] | None = None) -> str:
     while True:
-        tid = "lo-" + uuid.uuid4().hex[:6]
+        tid = "lo-" + uuid.uuid4().hex[:8]  # 8桁の16進数（約43億通り）。既存の6桁の ID もそのまま有効
         if not existing or tid not in existing:
             return tid
 
@@ -278,7 +313,7 @@ def all_tasks() -> list[dict]:
 @locked
 def add_task(content: str, scheduled: str = "", due: str = "", priority: str = "", source: str = "",
              task_id: str | None = None, done: bool = False, done_date: str = "", created: str | None = None) -> str:
-    tid = task_id or new_task_id({t["id"] for t in all_tasks()})
+    tid = task_id or new_task_id()
     append(TASKS, {"ID": tid, "登録日": created or util.fmt_date(util.today()), "内容": content,
                    "完了": "TRUE" if done else "", "実行予定日": scheduled, "期限": due, "優先度": priority,
                    "出典": source, "完了日": done_date})

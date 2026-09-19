@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 import sheets
 import state
+import task_dates
 import task_sync
 import util
 import writing_log
@@ -74,6 +75,20 @@ async def post_list(channel, header: str | None = None) -> None:
     state.put_pending(msg.id, channel.id, "today_list", {"items": [{"id": t["id"], "content": t["content"]} for t in tasks]})
 
 
+def plan_task(line: str, today: date) -> dict:
+    """1行のタスク文から、登録する内容・実行日・期限・優先度と、確認用の表記を決める。
+
+    実行日の言葉が無ければ「今日」（この部屋は「今日絶対やる」タスクの入口）。実行日が今日以前なら優先度「高」。
+    実行日が未来なら、その日の朝の案内に出る（今日の一覧には出ない）。
+    """
+    ext = task_dates.extract(line, today)
+    scheduled = ext.scheduled or today
+    detail = task_dates.describe(ext.scheduled, ext.due)  # 書かれた日付だけを表示する
+    return {"content": ext.content, "scheduled": task_dates.iso(scheduled), "due": task_dates.iso(ext.due),
+            "priority": "高" if scheduled <= today else "", "future": scheduled > today,
+            "label": f"{ext.content}（{detail}）" if detail else ext.content}
+
+
 def _lines(text: str) -> list[str]:
     out = []
     for raw in text.splitlines():
@@ -110,12 +125,19 @@ async def handle(message) -> None:
         return
 
     # それ以外の文は「今日絶対やる緊急タスク」。1行1タスク。
-    added = []
+    added, future = [], False
+    today = util.today()
     for line in _lines(text):
-        await asyncio.to_thread(sheets.add_task, line, scheduled=util.fmt_date(util.today()), priority="高", source=SOURCE)
-        added.append(line)
+        plan = plan_task(line, today)
+        await asyncio.to_thread(sheets.add_task, plan["content"], scheduled=plan["scheduled"], due=plan["due"],
+                                priority=plan["priority"], source=SOURCE)
+        added.append(plan["label"])
+        future = future or plan["future"]
     if not added:
         return
     await asyncio.to_thread(task_sync.run_safely)
     await util.ack(message, "📝")
-    await post_list(channel, "今日のタスクに追加しました：\n" + "\n".join(f"・{a}" for a in added))
+    header = ("追加しました：\n" if future else "今日のタスクに追加しました：\n") + "\n".join(f"・{a}" for a in added)
+    if future:
+        header += "\n（実行日が今日ではないタスクは、その日の朝に案内します）"
+    await post_list(channel, header)

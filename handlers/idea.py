@@ -18,6 +18,7 @@ import claude_client
 import notes
 import settings
 import sheets
+import task_dates
 import task_sync
 import util
 import vault_paths
@@ -38,7 +39,7 @@ _write_lock = asyncio.Lock()  # Ideas.md の「読む→書き換える」を1�
 _PROMPT = """次は、ユーザーが「アイデアの何でもゴミ箱」に投げたメモです。JSONだけを返してください。
 {{
   "tags": 内容に合うタグを、次の候補から1〜3個（先頭の # は付けない）: {candidates}。どれも合わなければ ["{default}"],
-  "task": 「〜を買う」「〜に連絡する」「〜を予約する」のように、ユーザー自身がやる具体的な行動が書かれているときだけ、その行動を短い一文で。創作のアイデア・感想・迷いは、タスクにしない。無ければ null
+  "task": 「〜を買う」「〜に連絡する」「〜を予約する」のように、ユーザー自身がやる具体的な行動が書かれているときだけ、その行動を短い一文で。創作のアイデア・感想・迷いは、タスクにしない。「明日」「9/25」「〜まで」など日付の言葉は、メモにあるとおりに文中へ残す。無ければ null
 }}
 
 メモ:
@@ -167,7 +168,9 @@ async def handle(message) -> None:
     task = str(info.get("task") or "").strip()
     if task:
         try:
-            await asyncio.to_thread(sheets.add_task, task, source=SOURCE)
+            ext = task_dates.extract(task, now.date())  # 「明日までに電話する」なら期限を設定する
+            await asyncio.to_thread(sheets.add_task, ext.content, scheduled=task_dates.iso(ext.scheduled),
+                                    due=task_dates.iso(ext.due), source=SOURCE)
             await asyncio.to_thread(task_sync.run_safely)
             await util.ack(message, "📋")
         except Exception:  # noqa: BLE001
