@@ -8,7 +8,7 @@ A personal "life management OS" Discord bot (Python, discord.py, Claude API, Goo
 
 - `SPEC.md` is the source of truth for behavior (channels, storage, sync, phases). Read it before changing anything. Update it first when the user changes requirements.
 - `2026-09-19 18-06人生管理OS.md` (owner's custom design) and the tutorial `…完全マニュアル.txt` are the original inputs; where they differ, the custom design wins.
-- Work is phased (SPEC §9: phase 0 security/guard is done; phase 0.5 GAS relay is done and verified live (`scripts/verify_relay.py` 12/12); phase 1 (01-today-task, 02-health, 03-looking-back, morning/evening posts, task sync) is done and verified live; phases 2–5 only when the user asks). **Do not start implementing a phase, or any code, unless the user explicitly asks for implementation.** When asked to write or revise the spec, edit only `SPEC.md`.
+- Work is phased (SPEC §9: phase 0 security/guard is done; phase 0.5 GAS relay is done and verified live (`scripts/verify_relay.py` 12/12); phase 1 (01-today-task, 02-health, 03-looking-back, morning/evening posts, task sync) is done and verified live; phase 3 is in progress: 09-idea is done and verified live (silent room: reactions only, images saved via the relay), 08-scrap and 10–12 are next; phases 2, 4, 5 only when the user asks. After each feature: push, then `bash deploy/update.sh` on the VM). **Do not start implementing a phase, or any code, unless the user explicitly asks for implementation.** When asked to write or revise the spec, edit only `SPEC.md`.
 
 ## Commands
 

@@ -25,7 +25,7 @@ import notes_policy
 import scheduler
 import sheets
 import state
-from handlers import health, looking_back, today_task
+from handlers import health, idea, looking_back, today_task
 
 log = logging.getLogger("life-os")
 
@@ -33,9 +33,10 @@ REQUIRED = ("DISCORD_TOKEN", "ANTHROPIC_API_KEY", "GOOGLE_SHEET_ID")
 
 
 def build_routes() -> dict:
-    """フェーズ 1: 01 / 02 / 03 のみ。ほかのチャンネルは、実装されるまで何もしない（記録したように見せない）。"""
+    """実装済みのチャンネルだけ。ほかは、実装されるまで何もしない（記録したように見せない）。"""
     c = config.CHANNELS
-    return {c["today"]: today_task.handle, c["health"]: health.handle, c["lookback"]: looking_back.handle}
+    return {c["today"]: today_task.handle, c["health"]: health.handle, c["lookback"]: looking_back.handle,
+            c["idea"]: idea.handle}
 
 
 class LifeOS(discord.Client):

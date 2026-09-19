@@ -38,6 +38,10 @@ def ideas() -> str:
     return lifeos(_C["idea"], "Ideas.md")
 
 
+def idea_attachment(name: str) -> str:
+    return lifeos(_C["idea"], "attachments", name)
+
+
 def project(room_key: str, filename: str) -> str:
     return lifeos(_C[room_key], filename)
 
