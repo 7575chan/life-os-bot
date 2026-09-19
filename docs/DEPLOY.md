@@ -179,7 +179,7 @@ sudo journalctl -u life-os-bot -f
 | 状態を見る | `sudo systemctl status life-os-bot --no-pager` |
 | 停止 | `sudo systemctl stop life-os-bot` |
 | 再起動 | `sudo systemctl restart life-os-bot` |
-| コードを更新（パソコンで直して push した後） | `cd ~/life-os-bot && bash deploy/update.sh` |
+| コードを更新（パソコンで直して push した後） | `cd ~/life-os-bot && bash deploy/update.sh`（Bot を再起動します）。**まだ手順 7 の前（Bot を開始していない）なら**、再起動せずに `cd ~/life-os-bot && git pull --ff-only` だけにします |
 | `.env` を直した後 | `sudo systemctl restart life-os-bot` |
 
 - **VM が再起動しても**、Bot は自動で起動します（`enable` 済み）。
@@ -195,6 +195,7 @@ sudo journalctl -u life-os-bot -f
 | `check_connections.py` の Discord が失敗 | `.env` の `DISCORD_TOKEN`、Developer Portal の「Message Content Intent」 |
 | `check_connections.py` のシートが失敗 | サービスアカウントへのシート共有（編集者）、`GOOGLE_SHEET_ID` |
 | `verify_relay.py` が失敗 | `GAS_RELAY_URL` と `GAS_RELAY_TOKEN`（GAS のスクリプト プロパティと同じ値か） |
+| `TypeError: 'function' object is not subscriptable`（`notes.py`） | コードの不具合（Python 3.12 などの古い Python でだけ起きる）で、修正済みです。パソコンで push し、VM で `cd ~/life-os-bot && git pull --ff-only` してから、もう一度実行します |
 | `systemctl status` が `failed` / 終了コード 3 | `journalctl -u life-os-bot -n 30` を見る。「すでに別の場所で Bot が動いています」なら、パソコン側の Bot を停止する（クラッシュ直後なら約90秒待つ） |
 | 何度も再起動を繰り返す | `journalctl -u life-os-bot -n 50` のエラーを確認 |
 | Bot が反応しない | Discord のチャンネル名が `.env` の `CHANNEL_*` と一致しているか、ログにエラーが出ていないか |

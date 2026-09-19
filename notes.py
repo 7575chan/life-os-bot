@@ -6,6 +6,8 @@
 - Drive 認証はサービスアカウント (credentials.json) のみ。OAuth は使わない。
 - すべて同期関数。呼び出し側は asyncio.to_thread 経由で使う。
 """
+from __future__ import annotations
+
 import re
 import shutil
 import time

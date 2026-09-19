@@ -15,6 +15,7 @@ A personal "life management OS" Discord bot (Python, discord.py, Claude API, Goo
 Python 3.14 venv at `.venv` (gitignored). Use `.venv/Scripts/python`.
 
 - Install: `.venv/Scripts/python -m pip install -r requirements-dev.txt` (runtime deps are in `requirements.txt`; `truststore` and `pytest` are dev-only)
+- **Python version trap:** dev is Python 3.14 (annotations are evaluated lazily) but the VM runs 3.10–3.12. Do not define class methods named like builtins (`list`, `dict`, `set`…) and then use those names in later annotations without `from __future__ import annotations`; `tests/test_py_compat.py` enforces this and Python 3.10 grammar. Before shipping, also import all modules under an older Python (e.g. `uv python install 3.12`; on this PC the uv-installed 3.12 cannot load `_ssl`, so `tests/test_drive_store_relay.py` can only run on 3.14).
 - Connection check: `.venv/Scripts/python scripts/check_connections.py` (Discord, Claude API, both spreadsheets; prints no secrets). GAS relay check: `scripts/verify_relay.py`.
 - Tests: `.venv/Scripts/python -m pytest -q` (single test: `-k test_name` or `tests/test_x.py::test_name`)
 - Run the bot: `.venv/Scripts/python main.py` (needs `.env`; see `.env.example`). `main.py` is not runnable until the handlers exist.
