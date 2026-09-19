@@ -46,5 +46,9 @@ def project(room_key: str, filename: str) -> str:
     return lifeos(_C[room_key], filename)
 
 
+def project_attachment(room_key: str, name: str) -> str:
+    return lifeos(_C[room_key], "attachments", name)
+
+
 def ceo_directives() -> str:
     return lifeos(_C["ceo"], "CEO-Directives.md")

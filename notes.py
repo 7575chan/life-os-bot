@@ -8,8 +8,11 @@
 """
 from __future__ import annotations
 
+import functools
+import logging
 import re
 import shutil
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +21,19 @@ import config
 import gas_relay
 import notes_policy as policy
 from notes_policy import LIFEOS_DIR, TASK_FILE, VAULT_ROOT, AccessDenied  # noqa: F401
+
+log = logging.getLogger("life-os.notes")
+
+
+def _synchronized(fn):
+    """Drive へのアクセスを1つずつにする（googleapiclient の接続はスレッドをまたいで使えないため）。"""
+
+    @functools.wraps(fn)
+    def wrapper(self, *a, **kw):
+        with self._io:
+            return fn(self, *a, **kw)
+
+    return wrapper
 
 # ---------------------------------------------------------------- Markdown 編集 (純粋関数)
 
@@ -190,10 +206,16 @@ class DriveStore:
 
     FOLDER = "application/vnd.google-apps.folder"
     SCOPES = ["https://www.googleapis.com/auth/drive"]
-    _FIELDS = "id,name,mimeType,parents,webViewLink,modifiedTime"
+    _FIELDS = "id,name,mimeType,parents,webViewLink,modifiedTime,trashed"
+    # 中継が作ったファイルは、作成の数秒〜20秒後に、パソコンの Google Drive for Desktop が「作成直後の古い内容」を
+    # クラウドに書き戻すことがある（実機で確認）。その間に追記すると、追記が消える。作成から SETTLE_SECONDS の間は、
+    # ①自分が最後に書いた内容を読み取りに使い、②書き込みの後に VERIFY_DELAYS 秒後にクラウドを確認して、
+    # 自分が以前に書いた古い内容に戻されていれば書き直す。（Obsidian で編集された未知の内容は、書き直さない）
+    SETTLE_SECONDS = 90.0
+    VERIFY_DELAYS = (15.0, 35.0, 65.0)
 
     def __init__(self, lifeos_id: str, taskfile_id: str, vault_id: str, credentials_file: str = "",
-                 relay=None, svc=None):
+                 relay=None, svc=None, clock=None, schedule=None):
         if not lifeos_id:
             raise RuntimeError("OBSIDIAN_LIFEOS_FOLDER_ID が未設定です")
         if svc is None:  # テストでは偽の svc を渡す
@@ -206,6 +228,13 @@ class DriveStore:
         self.relay = relay
         self.lifeos_id, self.taskfile_id, self.vault_id = lifeos_id, taskfile_id, vault_id
         self._folder_map: tuple[float, dict[str, str]] | None = None
+        # Drive の名前での検索は、作ったばかりのファイルが数秒間見えない（反映遅れ）。
+        # このプロセスで作った・確認したファイルの ID を覚えて、検索を待たずに読み書きできるようにする。
+        self._known: dict[str, str] = {}
+        self._io = threading.RLock()
+        self._clock = clock or time.time
+        self._schedule = schedule or self._start_timer
+        self._recent: dict[str, dict] = {}  # パス -> {"created": 作成時刻, "history": [書いた内容...], "mime": ...}
 
     @classmethod
     def from_config(cls):
@@ -272,18 +301,97 @@ class DriveStore:
         root, parts, _ = self._root(n)
         if not parts:
             return {"id": root, "name": n or "(vault)", "mimeType": self.FOLDER}, None, n
+        known = self._known_meta(n)
+        if known is not None:
+            return known, (known.get("parents") or [None])[0], known["name"]
         parent = self._dir(root, parts[:-1])
         if parent is None:
             return None, None, parts[-1]
         return self._child(parent, parts[-1]), parent, parts[-1]
 
+    def _known_meta(self, n: str) -> dict | None:
+        """覚えている ID のファイルを、ID で直接取得する。消されていたら忘れる。"""
+        fid = self._known.get(n)
+        if not fid:
+            return None
+        from googleapiclient.errors import HttpError
+
+        try:
+            meta = self.svc.files().get(fileId=fid, fields=self._FIELDS, supportsAllDrives=True).execute()
+        except HttpError:
+            self._known.pop(n, None)
+            return None
+        if meta.get("trashed"):
+            self._known.pop(n, None)
+            return None
+        return meta
+
     # -- API
+    @_synchronized
     def read(self, path: str) -> str | None:
+        info = self._recent_info(path)
+        if info is not None:  # 作成直後: クラウドは書き戻されて古いかもしれないので、自分が最後に書いた内容を使う
+            return info["history"][-1].decode("utf-8")
         f, _, _ = self._locate(path)
         if not f:
             return None
         data = self.svc.files().get_media(fileId=f["id"], supportsAllDrives=True).execute()
         return data.decode("utf-8")
+
+    # -- 同期ソフトの書き戻しへの備え
+    def _recent_info(self, path: str) -> dict | None:
+        try:
+            n = policy.normalize(path)
+        except AccessDenied:
+            return None
+        info = self._recent.get(n)
+        if info is None:
+            return None
+        if self._clock() - info["created"] > self.SETTLE_SECONDS:
+            return None
+        return info
+
+    def _after_update(self, n: str, data: bytes, mime: str) -> None:
+        info = self._recent_info(n)
+        if info is None:
+            return
+        info["history"].append(data)
+        info["mime"] = mime
+        for delay in self.VERIFY_DELAYS:
+            self._schedule(delay, lambda n=n: self._verify(n))
+
+    @_synchronized
+    def _verify(self, n: str) -> None:
+        """クラウドの内容を確認し、自分が以前に書いた古い内容に戻されていれば、最新の内容で書き直す。"""
+        info = self._recent.get(n)
+        fid = self._known.get(n)
+        if info is None or not fid:
+            return
+        from googleapiclient.errors import HttpError
+
+        try:
+            cloud = self.svc.files().get_media(fileId=fid, supportsAllDrives=True).execute()
+        except HttpError:
+            return  # 消された・改名された。何もしない
+        latest = info["history"][-1]
+        if cloud == latest:
+            return
+        if cloud in info["history"]:
+            log.warning("同期ソフトが古い内容を書き戻したため、書き直します: %s", n)
+            self._update_existing(fid, latest, info["mime"])
+        else:
+            log.info("クラウドの内容が想定と違う（Obsidian などで編集された可能性）ので、書き直しません: %s", n)
+
+    def _start_timer(self, delay: float, fn) -> None:
+        def run():
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                log.warning("書き戻しの確認に失敗しました", exc_info=True)
+
+        t = threading.Timer(delay, run)
+        t.daemon = True
+        t.start()
 
     def _update_existing(self, file_id: str, data: bytes, mime: str) -> str:
         from googleapiclient.http import MediaInMemoryUpload
@@ -300,34 +408,62 @@ class DriveStore:
             raise AccessDenied(f"書き込み許可リスト外です: {n!r}")
         f, _, _ = self._locate(n)
         if f:
-            return self._update_existing(f["id"], data, mime)
+            url = self._update_existing(f["id"], data, mime)
+            self._after_update(n, data, mime)
+            return url
         relay = self._need_relay()
         res = relay.create_file(n, text) if text is not None else relay.create_bytes(n, data, mime)
-        if res.get("status") == "exists":  # 反映遅延などで見えていなかった既存ファイル
+        if res.get("id"):
+            self._known[n] = res["id"]  # 検索に出るまで数秒かかるので、ID を覚えておく
+        if res.get("status") == "created":
+            self._recent[n] = {"created": self._clock(), "history": [data], "mime": mime}
+        if res.get("status") == "exists":
+            # 検索の反映遅れなどで、こちらからは見えなかった既存ファイル。中継が返した ID で内容を更新する。
+            # （以前は、見つからないと何も書かずに成功として返していたため、書き込みが黙って失われた）
+            if res.get("id"):
+                url = self._update_existing(res["id"], data, mime)
+                self._after_update(n, data, mime)
+                return url
             f, _, _ = self._locate(n)
             if f:
-                return self._update_existing(f["id"], data, mime)
+                url = self._update_existing(f["id"], data, mime)
+                self._after_update(n, data, mime)
+                return url
+            raise gas_relay.RelayError("ファイルはすでにありますが、更新できませんでした（少し待ってからやり直してください）")
         return res.get("url") or res.get("id", "")
 
+    @_synchronized
     def write(self, path: str, text: str) -> str:
         return self._put(path, text.encode("utf-8"), "text/markdown", text)
 
+    @_synchronized
     def write_bytes(self, path: str, data: bytes, mime: str = "application/octet-stream") -> str:
         return self._put(path, data, mime, None)
 
+    @_synchronized
     def rename(self, old: str, new: str) -> None:
         for p in (old, new):
             if not policy.is_allowed(policy.normalize(p), "rename"):
                 raise AccessDenied(f"書き込み許可リスト外です: {p!r}")
         self._need_relay().rename(policy.normalize(old), policy.normalize(new))
+        fid = self._known.pop(policy.normalize(old), None)
+        if fid:
+            self._known[policy.normalize(new)] = fid  # 改名後の名前でも、すぐ見つかるように
+        info = self._recent.pop(policy.normalize(old), None)
+        if info:
+            self._recent[policy.normalize(new)] = info
 
+    @_synchronized
     def delete(self, path: str) -> None:
         """完全削除ではなくゴミ箱へ移動する（復元可能）。中継が実行する。"""
         n = policy.normalize(path)
         if not policy.is_allowed(n, "delete"):
             raise AccessDenied(f"書き込み許可リスト外です: {n!r}")
         self._need_relay().trash(n)
+        self._known.pop(n, None)
+        self._recent.pop(n, None)
 
+    @_synchronized
     def list(self, prefix: str) -> list[str]:
         n = VAULT_ROOT if prefix in (VAULT_ROOT, ".") else policy.normalize(prefix)
         root, parts, _ = self._root(n)
@@ -343,13 +479,20 @@ class DriveStore:
                     stack.append((item["id"], rel))
                 elif item["name"].endswith(".md"):
                     out.append(rel)
+        # 検索にまだ出ていない、このプロセスで作ったファイルも含める
+        for path in list(self._known):
+            if path.startswith(n + "/" if n else "") and path.endswith(".md") and path not in out \
+                    and self._known_meta(path) is not None:
+                out.append(path)
         return sorted(out)
 
+    @_synchronized
     def modified(self, path: str) -> str | None:
         f, _, _ = self._locate(path)
         return f["modifiedTime"] if f else None
 
     # -- メタデータ（appProperties）: ファイルの中身を変えず、Obsidian にも見えない。多重起動の「使用中の印」用
+    @_synchronized
     def get_props(self, path: str) -> dict:
         f, _, _ = self._locate(path)
         if not f:
@@ -357,6 +500,7 @@ class DriveStore:
         r = self.svc.files().get(fileId=f["id"], fields="appProperties", supportsAllDrives=True).execute()
         return dict(r.get("appProperties") or {})
 
+    @_synchronized
     def set_props(self, path: str, props: dict) -> None:
         """props の値が None のキーは削除する。書き込み許可領域の中のフォルダ/ファイルだけ。"""
         n = policy.normalize(path)
@@ -368,6 +512,7 @@ class DriveStore:
         self.svc.files().update(fileId=f["id"], body={"appProperties": props}, fields="id",
                                 supportsAllDrives=True).execute()
 
+    @_synchronized
     def search(self, words: list[str], limit: int, scope: str) -> list[dict]:
         """Drive の全文検索 API を使い、全ノートの本文を毎回ダウンロードしない。"""
         root_id = self.lifeos_id if scope == LIFEOS_DIR else self.vault_id

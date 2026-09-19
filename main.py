@@ -1,6 +1,7 @@
 """Bot 本体: イベント受信とチャンネルごとのルーティング。"""
 import os
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,7 +26,7 @@ import notes_policy
 import scheduler
 import sheets
 import state
-from handlers import health, idea, looking_back, today_task
+from handlers import health, idea, looking_back, project, scrap, today_task
 
 log = logging.getLogger("life-os")
 
@@ -36,7 +37,9 @@ def build_routes() -> dict:
     """実装済みのチャンネルだけ。ほかは、実装されるまで何もしない（記録したように見せない）。"""
     c = config.CHANNELS
     return {c["today"]: today_task.handle, c["health"]: health.handle, c["lookback"]: looking_back.handle,
-            c["idea"]: idea.handle}
+            c["idea"]: idea.handle, c["scrap"]: scrap.handle,
+            c["novel"]: project.make_handler("novel"), c["trpg"]: project.make_handler("trpg"),
+            c["others"]: project.make_handler("others")}
 
 
 class LifeOS(discord.Client):
@@ -68,8 +71,11 @@ class LifeOS(discord.Client):
         handler = self.routes.get(message.channel.name)
         if handler is None:
             return
+        started = time.monotonic()
+        log.info("#%s: 処理を開始します（%d文字, 添付%d件）", message.channel.name, len(message.content or ""), len(message.attachments))
         try:
             await handler(message)
+            log.info("#%s: 処理が完了しました（%.1f秒）", message.channel.name, time.monotonic() - started)
         except notes_policy.AccessDenied:
             log.exception("access denied in #%s", message.channel.name)
             await message.channel.send("そのファイルは触らない設定になっています。")

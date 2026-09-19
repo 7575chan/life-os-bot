@@ -70,3 +70,37 @@ def test_replace_title_and_meta():
     assert notes.replace_title("# 旧\n本文", "新").startswith("# 新")
     t = notes.set_meta_line("---\ntags: #a\n---\n本文", "tags", "#b #c")
     assert "tags: #b #c" in t and "#a" not in t
+
+
+# ---------------------------------------------------------------- リアクションの失敗はログに残す
+
+
+def test_ack_failure_is_logged_not_swallowed_silently(caplog):
+    import asyncio
+    import logging
+
+    class Boom:
+        async def add_reaction(self, emoji):
+            raise RuntimeError("Missing Permissions")
+
+    with caplog.at_level(logging.WARNING, logger="life-os.util"):
+        asyncio.run(util.ack(Boom(), "📝"))  # 例外は出さない（処理は続ける）
+    assert any("リアクション" in r.message and "📝" in r.message for r in caplog.records)
+    assert any("Missing Permissions" in (r.exc_text or "") or r.exc_info for r in caplog.records)
+
+
+def test_ack_success_logs_nothing(caplog):
+    import asyncio
+    import logging
+
+    class Ok:
+        def __init__(self):
+            self.got = []
+
+        async def add_reaction(self, emoji):
+            self.got.append(emoji)
+
+    m = Ok()
+    with caplog.at_level(logging.WARNING, logger="life-os.util"):
+        asyncio.run(util.ack(m, "🌙"))
+    assert m.got == ["🌙"] and not caplog.records

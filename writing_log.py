@@ -165,3 +165,64 @@ def yesterday_block(day: date) -> str | None:
         return format_morning(stats_for(log, y), y)
     except Exception:  # noqa: BLE001
         return None
+
+
+# ---------------------------------------------------------------- プロジェクト部屋（10〜12）での作品の照合と進捗
+
+
+def _match_key(name: str) -> str:
+    import unicodedata
+
+    return re.sub(r"[\s　「」『』【】（）()\-_・]", "", unicodedata.normalize("NFKC", name)).lower()
+
+
+def match_work(name: str, works: dict[str, Work]) -> Work | None:
+    """ノートの作品名を、執筆記録シートの作品と照合する。完全一致、次に「一方がもう一方を含む」（2文字以上・1件だけのとき）。
+    曖昧なときは None（勝手に紐付けない）。"""
+    key = _match_key(name)
+    if len(key) < 1 or key.startswith("未命名"):
+        return None  # 名前が決まっていない作品は、どの作品とも紐付けない
+    exact = [w for w in works.values() if _match_key(w.name) == key]
+    if len(exact) == 1:
+        return exact[0]
+
+    def contains(a: str, b: str) -> bool:  # 短い方が、2文字以上で、数字だけでなく、長い方に含まれている
+        short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+        return len(short) >= 2 and re.search(r"\D", short) is not None and short in long_
+
+    part = [w for w in works.values() if contains(key, _match_key(w.name))]
+    return part[0] if len(part) == 1 and not exact else None
+
+
+def progress_summary(log: WritingLog, name: str, today: date) -> dict | None:
+    """作品の総文字数・目標・締切・直近の書くペースを返す。照合できなければ None。読み取りだけで、評価はしない。"""
+    w = match_work(name, log.works)
+    if w is None or not log.snaps:
+        return None
+    latest = log.snaps[-1]
+    total = latest.totals.get(w.name, 0)
+    week_base = next((s for s in log.snaps if s.day >= latest.day - timedelta(days=7)), log.snaps[0])
+    two_base = next((s for s in log.snaps if s.day >= latest.day - timedelta(days=ACTIVE_DAYS)), log.snaps[0])
+    added_7d = max(0, total - week_base.totals.get(w.name, 0))
+    span = max((latest.day - two_base.day).days, 1)
+    avg = max(0, total - two_base.totals.get(w.name, 0)) / span
+    days_left = (w.deadline - today).days if w.deadline and w.deadline >= today else None
+    remaining = max(0, w.target - total) if w.target else None
+    need = round(remaining / days_left) if remaining is not None and days_left else None
+    return {"work": w.name, "total": total, "target": w.target, "pct": round(total / w.target * 100) if w.target else None,
+            "deadline": w.deadline, "days_left": days_left, "remaining": remaining, "added_7d": added_7d,
+            "avg_per_day": round(avg), "need_per_day": need, "as_of": latest.day}
+
+
+def format_progress(p: dict) -> str:
+    lines = [f"執筆記録シートの「{p['work']}」（{p['as_of']:%m/%d} 時点）: 総文字数 {p['total']:,}"]
+    if p["target"]:
+        lines[0] += f" / 目標 {p['target']:,}（{p['pct']}%）"
+    lines.append(f"直近7日の増加 {p['added_7d']:,}文字、直近{ACTIVE_DAYS}日の平均 {p['avg_per_day']:,}文字/日")
+    if p["days_left"] is not None:
+        lines.append(f"締切 {p['deadline']:%Y-%m-%d}（あと{p['days_left']}日）")
+        if p["need_per_day"] is not None:
+            lines.append(f"目標まで残り {p['remaining']:,}文字 → 締切までに均すと {p['need_per_day']:,}文字/日")
+    elif p["deadline"]:
+        lines.append(f"締切 {p['deadline']:%Y-%m-%d}（過ぎています）")
+    return "\n".join(lines)

@@ -6,7 +6,9 @@
 """
 import re
 
+import httplib2
 import pytest
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaInMemoryUpload
 
 import gas_relay
@@ -31,23 +33,28 @@ class FakeFiles:
     def __init__(self):
         self.items: dict[str, dict] = {}
         self.updates: list[tuple[str, bytes | None]] = []
+        self.hidden: set[str] = set()  # 検索（list）にはまだ出ない ID（Drive の反映遅れ）。ID での取得（get）はできる
 
     def add(self, fid, name, parent, folder=False, content=b""):
         self.items[fid] = {"id": fid, "name": name, "mimeType": FOLDER if folder else "text/markdown",
                            "parents": [parent] if parent else [], "content": content,
-                           "webViewLink": f"https://drive/{fid}", "modifiedTime": "2026-09-19T00:00:00Z"}
+                           "webViewLink": f"https://drive/{fid}", "modifiedTime": "2026-09-19T00:00:00Z", "trashed": False}
 
     def list(self, q, **kw):
         m = re.match(r"'([^']+)' in parents and name='(.*)' and trashed=false$", q)
         if m:
             parent, name = m.group(1), m.group(2).replace("\\'", "'")
-            return _Exec({"files": [dict(i) for i in self.items.values() if parent in i["parents"] and i["name"] == name]})
+            return _Exec({"files": [dict(i) for i in self.items.values() if parent in i["parents"] and i["name"] == name
+                                    and i["id"] not in self.hidden and not i["trashed"]]})
         m = re.match(r"'([^']+)' in parents and trashed=false$", q)
         if m:
-            return _Exec({"files": [dict(i) for i in self.items.values() if m.group(1) in i["parents"]]})
+            return _Exec({"files": [dict(i) for i in self.items.values() if m.group(1) in i["parents"]
+                                    and i["id"] not in self.hidden and not i["trashed"]]})
         raise AssertionError(f"想定外のクエリ: {q}")
 
     def get(self, fileId, **kw):
+        if fileId not in self.items:
+            raise HttpError(httplib2.Response({"status": 404}), b"not found")
         return _Exec(dict(self.items[fileId]))
 
     def get_media(self, fileId, **kw):
@@ -72,21 +79,46 @@ class FakeSvc:
 
 
 class FakeRelay:
-    def __init__(self, files: FakeFiles, status="created"):
-        self.files, self.status, self.calls = files, status, []
+    """GAS 中継の偽物。実際にファイルを作る。作ったファイルは、Drive の検索にすぐには出ない（lag=True）。"""
 
-    def _result(self, path):
-        if self.status == "exists":
-            return {"ok": False, "status": "exists", "id": "F-ideas"}
-        return {"ok": True, "status": "created", "url": f"https://new/{path}"}
+    def __init__(self, files: FakeFiles, status="created", lag=True):
+        self.files, self.status, self.lag, self.calls, self.n = files, status, lag, [], 0
+
+    def _walk(self, path, create):
+        """path の親フォルダ ID と、そのファイル名（既存のファイルは、検索に出ていなくても見つける）。"""
+        parts = path.split("/")
+        parent = "LIFE"  # 先頭は 06-Life-OS
+        for part in parts[1:-1]:
+            hit = next((i for i in self.files.items.values() if part == i["name"] and parent in i["parents"]
+                        and i["mimeType"] == FOLDER), None)
+            if hit is None:
+                self.n += 1
+                fid = f"D-new{self.n}"
+                self.files.add(fid, part, parent, folder=True)
+                hit = self.files.items[fid]
+            parent = hit["id"]
+        return parent, parts[-1]
+
+    def _result(self, path, content):
+        parent, name = self._walk(path, True)
+        existing = next((i for i in self.files.items.values() if i["name"] == name and parent in i["parents"]
+                         and i["mimeType"] != FOLDER), None)
+        if existing is not None:
+            return {"ok": False, "status": "exists", "id": existing["id"]}
+        self.n += 1
+        fid = f"F-new{self.n}"
+        self.files.add(fid, name, parent, content=content)
+        if self.lag:
+            self.files.hidden.add(fid)
+        return {"ok": True, "status": "created", "id": fid, "url": f"https://new/{path}"}
 
     def create_file(self, path, text):
         self.calls.append(("create_file", path, text))
-        return self._result(path)
+        return self._result(path, text.encode("utf-8"))
 
     def create_bytes(self, path, data, mime="application/octet-stream"):
         self.calls.append(("create_bytes", path, data, mime))
-        return self._result(path)
+        return self._result(path, data)
 
     def rename(self, old, new):
         self.calls.append(("rename", old, new))
@@ -94,6 +126,10 @@ class FakeRelay:
 
     def trash(self, path):
         self.calls.append(("trash", path))
+        parent, name = self._walk(path, False)
+        for i in self.files.items.values():
+            if i["name"] == name and parent in i["parents"]:
+                i["trashed"] = True
         return {"ok": True, "status": "trashed"}
 
 
@@ -137,26 +173,83 @@ def test_bytes_go_through_relay(env):
     assert relay.calls == [("create_bytes", f"{LIFEOS_DIR}/08-scrap/attachments/a.png", b"\x89PNG", "image/png")]
 
 
-def test_relay_reports_exists_falls_back_to_update(env):
+def test_relay_says_exists_but_search_cannot_see_it_then_content_is_written_by_id(env):
+    """検索の反映遅れで見えなかった既存ファイル。以前は、何も書かずに成功として返していた（書き込みが黙って失われた）。"""
     store, files, relay = env
-    relay.status = "exists"
-    # Drive の反映遅延で一覧に出ていなかった、という状況: 先に見えないファイル名を指定して create → exists
-    files.items["F-late"] = {**files.items["F-ideas"], "id": "F-late", "name": "Late.md", "content": b""}
-    orig = files.items.pop("F-late")
-    calls = {"n": 0}
-    real_list = files.list
-
-    def flaky_list(q, **kw):  # 最初の1回は見えない
-        calls["n"] += 1
-        if calls["n"] <= 2:
-            return _Exec({"files": [i for i in real_list(q).execute()["files"] if i["name"] != "Late.md"]})
-        files.items["F-late"] = orig
-        return real_list(q, **kw)
-
-    files.list = flaky_list
+    files.add("F-late", "Late.md", "D-idea", content=b"")
+    files.hidden.add("F-late")  # 検索には出ない
     store.write(f"{LIFEOS_DIR}/09-idea/Late.md", "遅延")
-    assert relay.calls[0][0] == "create_file"
-    assert files.items["F-late"]["content"] == "遅延".encode()
+    assert relay.calls[0][0] == "create_file"  # 見えなかったので、中継に作成を頼んだ → exists が返る
+    assert files.items["F-late"]["content"] == "遅延".encode()  # 返ってきた ID で更新された
+
+
+def test_relay_says_exists_without_an_id_is_an_error_not_a_silent_success(env):
+    store, files, relay = env
+    relay._result = lambda path, content: {"ok": False, "status": "exists"}
+    files.add("F-late", "Late.md", "D-idea", content=b"old")
+    files.hidden.add("F-late")
+    with pytest.raises(gas_relay.RelayError, match="更新できませんでした"):
+        store.write(f"{LIFEOS_DIR}/09-idea/Late.md", "新")
+    assert files.items["F-late"]["content"] == b"old"
+
+
+def test_a_file_just_created_is_usable_before_search_can_see_it(env):
+    """作った直後の read-modify-write（追記）で、以前の記録が消えたり、追記が失われたりしない。"""
+    store, files, relay = env
+    path = f"{LIFEOS_DIR}/10-project-novel/Novel_月の庭.md"
+    store.append_entry(path, "## 1回目\n最初の記録", "月の庭")
+    assert [c[0] for c in relay.calls] == ["create_file"]
+    new_id = next(i for i in files.hidden)
+    assert store.read(path).startswith("# 月の庭\n\n## 1回目")  # 検索に出ていなくても読める
+    store.append_entry(path, "## 2回目\n次の記録", "月の庭")
+    assert [c[0] for c in relay.calls] == ["create_file"]  # 2回目は作成し直さず、更新（サービスアカウント）
+    assert files.updates[-1][0] == new_id
+    text = files.items[new_id]["content"].decode()
+    assert "最初の記録" in text and "次の記録" in text and text.index("最初の記録") < text.index("次の記録")
+    store.append_entry(path, "## 3回目\nさらに", "月の庭")
+    assert files.items[new_id]["content"].decode().count("\n## ") == 3
+
+
+def test_listing_includes_files_search_has_not_indexed_yet(env):
+    store, files, relay = env
+    store.write(f"{LIFEOS_DIR}/10-project-novel/Novel_A.md", "a")
+    store.write(f"{LIFEOS_DIR}/10-project-novel/Novel_B.md", "b")
+    listed = store.list(f"{LIFEOS_DIR}/10-project-novel")
+    assert listed == [f"{LIFEOS_DIR}/10-project-novel/Novel_A.md", f"{LIFEOS_DIR}/10-project-novel/Novel_B.md"]
+    assert store.list(f"{LIFEOS_DIR}/09-idea") == [f"{LIFEOS_DIR}/09-idea/Ideas.md"]  # 別のフォルダには混ざらない
+
+
+def test_remembered_id_is_forgotten_when_the_file_is_deleted_or_trashed(env):
+    store, files, relay = env
+    path = f"{LIFEOS_DIR}/09-idea/Tmp.md"
+    store.write(path, "一時")
+    assert store.read(path) == "一時"
+    store.delete(path)
+    assert store.read(path) is None  # ゴミ箱に入ったファイルは、覚えていても使わない
+    store2 = env[0]
+    files.items[next(i for i, v in files.items.items() if v["name"] == "Tmp.md")]["trashed"] = True
+    assert store2.list(f"{LIFEOS_DIR}/09-idea") == [f"{LIFEOS_DIR}/09-idea/Ideas.md"]
+
+
+def test_remembered_id_is_forgotten_when_drive_says_not_found(env):
+    store, files, relay = env
+    path = f"{LIFEOS_DIR}/09-idea/Gone.md"
+    store.write(path, "消える")
+    files.items.pop(next(i for i, v in files.items.items() if v["name"] == "Gone.md"))  # Drive 側で完全に消えた
+    assert store.read(path) == "消える"  # 作成から90秒以内は、自分が書いた内容を返す（同期ソフトの書き戻しへの備え）
+    store._b._clock = lambda: __import__("time").time() + 1000  # 90秒を過ぎたら、クラウドを見に行く
+    assert store.read(path) is None  # 例外にならず、「無い」として扱う
+
+
+def test_rename_carries_the_remembered_id_to_the_new_name(env):
+    store, files, relay = env
+    old, new = f"{LIFEOS_DIR}/10-project-novel/Novel_未命名.md", f"{LIFEOS_DIR}/10-project-novel/Novel_月の庭.md"
+    store.write(old, "# 未命名\n記録")
+    fid = next(iter(files.hidden))
+    store.rename(old, new)  # 中継が改名する（偽物は名前を変えないので、名前だけ変えておく）
+    files.items[fid]["name"] = "Novel_月の庭.md"
+    assert store._b._known.get(new) == fid and old not in store._b._known
+    assert store.read(new) == "# 未命名\n記録"  # 改名直後も、検索を待たずに読める
 
 
 def test_task_file_updated_by_id(env):

@@ -1,10 +1,13 @@
 """副作用のない共通関数と Discord 補助関数。"""
 import json
+import logging
 import re
 import unicodedata
 from datetime import date, datetime, timedelta
 
 import config
+
+log = logging.getLogger("life-os.util")
 
 DATE_RE = re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
 
@@ -140,10 +143,11 @@ async def read_images(message) -> list[tuple[bytes, str]]:
 
 
 async def ack(message, emoji: str = "📝"):
+    """リアクションを付ける。失敗しても処理は止めないが、原因が分かるようにログに残す（権限不足など）。"""
     try:
         await message.add_reaction(emoji)
     except Exception:
-        pass
+        log.warning("リアクション %s を付けられませんでした", emoji, exc_info=True)
 
 
 async def send_long(channel, text: str, reference=None):

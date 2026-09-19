@@ -118,7 +118,8 @@ async def _classify(text: str) -> dict:
     return got if isinstance(got, dict) else fallback
 
 
-async def _save_attachments(message, now: datetime) -> list[dict]:
+async def _save_attachments(message, now: datetime, path_fn=vault_paths.idea_attachment) -> list[dict]:
+    """添付を保存する。path_fn(名前) が保存先のパス（10〜12 のプロジェクト部屋でも共有する）。"""
     store = notes.get_store()
     out = []
     for i, a in enumerate(message.attachments, 1):
@@ -134,7 +135,7 @@ async def _save_attachments(message, now: datetime) -> list[dict]:
         else:
             try:
                 data = await a.read()
-                await asyncio.to_thread(store.write_bytes, vault_paths.idea_attachment(name), data,
+                await asyncio.to_thread(store.write_bytes, path_fn(name), data,
                                         (a.content_type or "image/png").split(";")[0])
                 entry["saved"] = True
             except Exception:  # noqa: BLE001  画像が保存できなくても、メモ本体は残す
