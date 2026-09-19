@@ -1,0 +1,14 @@
+.env
+credentials.json
+*.json.key
+data/
+vault/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+執筆記録.xlsx
+deploy/vm.env
+*.env
+!.env.example
+2026-09-19*

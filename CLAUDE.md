@@ -1,0 +1,61 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+A personal "life management OS" Discord bot (Python, discord.py, Claude API, Google Sheets via `gspread`, Obsidian notes on Google Drive via Drive API v3). Documents are in Japanese; reply in the language the user uses.
+
+- `SPEC.md` is the source of truth for behavior (channels, storage, sync, phases). Read it before changing anything. Update it first when the user changes requirements.
+- `2026-09-19 18-06人生管理OS.md` (owner's custom design) and the tutorial `…完全マニュアル.txt` are the original inputs; where they differ, the custom design wins.
+- Work is phased (SPEC §9: phase 0 security/guard is done; phase 0.5 GAS relay is done and verified live (`scripts/verify_relay.py` 12/12); phase 1 (01-today-task, 02-health, 03-looking-back, morning/evening posts, task sync) is done and verified live; phases 2–5 only when the user asks). **Do not start implementing a phase, or any code, unless the user explicitly asks for implementation.** When asked to write or revise the spec, edit only `SPEC.md`.
+
+## Commands
+
+Python 3.14 venv at `.venv` (gitignored). Use `.venv/Scripts/python`.
+
+- Install: `.venv/Scripts/python -m pip install -r requirements-dev.txt` (runtime deps are in `requirements.txt`; `truststore` and `pytest` are dev-only)
+- Connection check: `.venv/Scripts/python scripts/check_connections.py` (Discord, Claude API, both spreadsheets; prints no secrets). GAS relay check: `scripts/verify_relay.py`.
+- Tests: `.venv/Scripts/python -m pytest -q` (single test: `-k test_name` or `tests/test_x.py::test_name`)
+- Run the bot: `.venv/Scripts/python main.py` (needs `.env`; see `.env.example`). `main.py` is not runnable until the handlers exist.
+- Dev machine SSL: Python's bundled CA bundle fails with `CERTIFICATE_VERIFY_FAILED` on this PC (likely security software inspecting traffic); the Windows trust store works. **Never disable certificate verification.** Use `truststore` (`truststore.inject_into_ssl()`), enabled only when `USE_TRUSTSTORE=1`, kept in dev-only requirements and not installed on the GCP VM. For ad-hoc scripts, call `truststore.inject_into_ssl()` first and run with `PYTHONUTF8=1 PYTHONIOENCODING=utf-8` (the console is cp932).
+
+## Secrets
+
+`credentials.json` (Google service account) and `.env` must never be read aloud, printed, committed, or copied. Authentication to Google Drive and Sheets is **service account only** (`credentials.json`). Do not add OAuth flows or token files. The GAS relay token (`GAS_RELAY_TOKEN`) is also a secret: never log or commit it.
+
+## Obsidian access rules (strict, enforced in code)
+
+Enforced by `notes_policy.py`; every operation goes through `notes.GuardedStore`. Never bypass it or duplicate its logic; never call a backend (`LocalStore` / `DriveStore`) directly.
+
+- **Reading (read / list / search) is allowed anywhere in the Vault.** Paths that escape the Vault (`..`, absolute paths) are denied.
+- **Writing, creating, renaming, and deleting are allowed ONLY for:**
+  1. everything under `06-Life-OS/`
+  2. `01🗃Task/01 Life-OS-Task.md` (content updates only; never rename or delete it)
+- Everything else is read-only: `01🗃Task/Project/`, `01🗃Task/Archive/`, other files in `01🗃Task/`, `00inbox`, `02 📝 memo`, `03-Writing`, `90💻project`, and all other existing folders. These are hand-managed notes.
+- A denied write raises `AccessDenied`, logs an ERROR to `data/guard.log`, and aborts the operation before any backend call. Write to Obsidian before recording in the spreadsheet so a denial leaves no half-applied state.
+- `rename` requires both source and destination to be writable. Deletes move files to the trash (Drive trash or `06-Life-OS/.trash/`), never permanent deletion.
+- Only send content from read-only notes to the Claude API when the user asks for a search or consultation; scheduled jobs must not read them.
+- Drive access starts from IDs (`OBSIDIAN_VAULT_FOLDER_ID` read-only sharing, `OBSIDIAN_LIFEOS_FOLDER_ID` and `OBSIDIAN_TASKFILE_ID` editor sharing). Never widen sharing or scopes without the user's instruction.
+
+### Creating new Obsidian files (Drive limitation, verified on the real Drive)
+
+The service account has no storage quota: it **cannot create files with content, and cannot write content into files it owns** (`403 Service Accounts do not have storage quota`), even by creating an empty file first. It **can** update the content of user-owned existing files, read everything shared with it, and create empty files and folders.
+
+- Decision: new files, images, folders, renames, and trash operations go through a **Google Apps Script relay** that runs as the user (SPEC §2.5); the service account only reads and updates existing files. `GuardedStore.write` decides: file exists → service account updates; missing → relay creates (with content).
+- The relay has only `create_file`, `create_bytes`, `rename`, `trash`; it never overwrites, reads, or updates. It re-validates the same allowlist (`06-Life-OS/` only; the task shelf and the rest of the Vault are out of its scope) and authenticates with a shared token. Always run the Bot-side policy check before calling it.
+- Do not switch to OAuth, shared drives, or any other workaround on your own.
+- Code map: `gas_relay.py` (client, 4 ops only), `notes.DriveStore` (service account never creates anything; delegates creates/renames/trash to the relay), `gas/Code.gs` (relay, re-validates `06-Life-OS/`), `scripts/verify_relay.py` (live check, needs the deployed GAS URL in `.env`).
+- The user-created files `Ideas.md`, `Inbox.md`, `CEO-Directives.md`, `Health-Manual.md` (hyphenated names) already exist and update fine. All 14 room folders under `06-Life-OS/` exist.
+
+## Architecture notes
+
+- **Hybrid storage:** numbers, dates, flags → Google Sheets (`sheets.py`). **Sheet (tab) names equal the Discord channel names** (`config.CHANNELS`); the 14 sheets the user created are used as-is, and 10/11/12 project rooms have separate sheets. Columns are addressed by header name, never position. `ensure_schema` writes headers only into empty sheets (or a sheet whose A1 is just its own name), appends missing columns, and refuses sheets with foreign data. Never touch sheets that don't map to a channel. Long text (articles, ideas, projects, diary, directives) → Obsidian `.md` under `06-Life-OS/<channel-name>/` (`vault_paths.py` builds the paths).
+- **One Discord channel = one feature**, routed by channel name in `main.py`. 14 channels in 4 categories (01–04 daily/health, 05–08 life/money, 09–12 creative, 13–14 CEO/system).
+- **Writing progress** comes from a separate read-only spreadsheet (`WORDCOUNT_SHEET_ID`, layout in SPEC §4); it is never written to. Look up works by column header, not by position.
+- **State:** reply/number-selection context and job dedupe live in SQLite (`state.py`, `data/state.db`).
+- **Deployment (24/7 on a GCP VM):** see `docs/DEPLOY.md`, `deploy/` (`life-os-bot.service`, `setup_vm.sh`, `update.sh`), `scripts/make_vm_env.py`. `.env` and `credentials.json` never go to GitHub; they are uploaded to the VM by hand (`credentials.json` stays a file). `USE_TRUSTSTORE` is dev-PC only and must not be set on the VM. The repo is `git init`-ed but nothing is committed or pushed by Claude; the user does that. Exit code 3 = another instance is running (systemd does not restart on it).
+- **Single instance:** `main.py` takes an OS file lock (`data/bot.lock`) and a time-limited lease stored as Drive `appProperties` on `06-Life-OS/14-ai` (`instance_guard.py`; 90 s TTL, 30 s heartbeat, released on clean exit). This stops a PC and the VM from running the bot at once. Stop the PC bot before starting the VM one. When testing, never leave a bot process running; a force-killed bot leaves its lease for up to 90 s.
+- **Tasks** sync both ways between the sheet and `01🗃Task/01 Life-OS-Task.md` in Obsidian Tasks-plugin syntax (SPEC §6); Obsidian wins on conflict, completion always wins.
+- **Design tone:** fully-affirming, guilt-free, behind-the-scenes assistant. No scolding or unsolicited advice; no penalty framing for missed tasks or reduced word counts. Keep prompts and bot messages consistent with this.
+- `#13-im-the-ceo` content (`CEO-Directives.md`) is injected into every Claude system prompt as the highest-priority guidance.

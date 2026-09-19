@@ -1,0 +1,4 @@
+# VM（Linux）で動くファイルは、Windows の Git を使っても LF のまま保つ
+*.sh text eol=lf
+*.service text eol=lf
+*.py text eol=lf

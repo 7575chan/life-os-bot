@@ -1,0 +1,23 @@
+[Unit]
+Description=Life OS Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# __USER__ は deploy/setup_vm.sh が、VM のユーザー名に置き換えます
+User=__USER__
+WorkingDirectory=/home/__USER__/life-os-bot
+ExecStart=/home/__USER__/life-os-bot/.venv/bin/python main.py
+Environment=PYTHONUNBUFFERED=1
+
+# 異常終了したら15秒後に自動で再起動します。
+# ただし終了コード3（すでに別の場所で Bot が動いている）のときは、再起動を繰り返しません。
+Restart=on-failure
+RestartSec=15
+RestartPreventExitStatus=3
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
