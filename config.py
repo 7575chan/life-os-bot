@@ -51,6 +51,8 @@ def _parse_time(value: str) -> time:
 MORNING_TIME = _parse_time(os.getenv("MORNING_TIME", "08:00"))
 EVENING_TIME = _parse_time(os.getenv("EVENING_TIME", "21:00"))
 REPORT_TIME = _parse_time(os.getenv("REPORT_TIME", "20:00"))
+# 昨日の執筆実績の投稿。執筆記録シートが当日の分を記録する時刻（毎日 09:44 前後）より後にする
+WRITING_TIME = _parse_time(os.getenv("WRITING_TIME", "10:00"))
 
 # キー: 内部名, 値: Discordチャンネル名
 CHANNELS = {

@@ -101,6 +101,23 @@ def test_format_morning_marks_older_record_date():
     assert "09/01 時点" in wl.format_morning(st, date(2026, 9, 5))
 
 
+def test_yesterday_is_todays_row_minus_yesterdays_row():
+    # 記録は毎日 09:44。9/24=1000, 9/25=1500, 9/26=2100（当日の行）
+    log = wl.parse(matrix([[D0 + 24, 0, 1000, 0, 0], [D0 + 25, 0, 1500, 0, 0], [D0 + 26, 0, 2100, 0, 0]]))
+    st = wl.yesterday_stats(log, date(2026, 9, 26))
+    assert st["total_added"] == 600 and st["date"] == date(2026, 9, 26)  # 2100 − 1500（当日の行 − 昨日の行）
+    text = wl.format_morning(st, date(2026, 9, 26))
+    assert text.startswith("📊 昨日の執筆実績\n") and "合計 +600文字" in text
+
+
+def test_no_yesterday_before_todays_row_exists():
+    # 今日 09:44 の行がまだ無い。昨日の行 − 一昨日の行を「昨日」として出さない
+    log = wl.parse(matrix([[D0 + 24, 0, 1000, 0, 0], [D0 + 25, 0, 1500, 0, 0]]))  # 9/24, 9/25
+    assert wl.yesterday_stats(log, date(2026, 9, 26)) is None
+    assert wl.yesterday_stats(wl.parse(matrix([])), date(2026, 9, 26)) is None
+    assert wl.yesterday_stats(wl.parse(matrix([[D0 + 26, 0, 2100, 0, 0]])), date(2026, 9, 26)) is None  # 比べる行が無い
+
+
 def test_snapshot_datetime_is_jst_aware():
     log = wl.parse(matrix([[D0, 0, 1, 1, 0]]))
     assert isinstance(log.snaps[0].ts, datetime) and log.snaps[0].ts.tzinfo is not None

@@ -26,7 +26,7 @@ import notes_policy
 import scheduler
 import sheets
 import state
-from handlers import health, idea, looking_back, private, project, scrap, today_task
+from handlers import ai, ceo, health, household, idea, ledger, looking_back, private, project, scrap, today_task
 
 log = logging.getLogger("life-os")
 
@@ -37,9 +37,11 @@ def build_routes() -> dict:
     """実装済みのチャンネルだけ。ほかは、実装されるまで何もしない（記録したように見せない）。"""
     c = config.CHANNELS
     return {c["today"]: today_task.handle, c["health"]: health.handle, c["lookback"]: looking_back.handle,
-            c["private"]: private.handle, c["idea"]: idea.handle, c["scrap"]: scrap.handle,
+            c["private"]: private.handle, c["household"]: household.handle, c["ledger"]: ledger.handle,
+            c["idea"]: idea.handle, c["scrap"]: scrap.handle,
             c["novel"]: project.make_handler("novel"), c["trpg"]: project.make_handler("trpg"),
-            c["others"]: project.make_handler("others")}
+            c["others"]: project.make_handler("others"),
+            c["ceo"]: ceo.handle, c["ai"]: ai.handle}
 
 
 class LifeOS(discord.Client):

@@ -14,6 +14,11 @@ def health_manual() -> str:
     return lifeos(_C["health"], "Health-Manual.md")
 
 
+def health_manual_previous() -> str:
+    """取扱マニュアルを作り直す前の版（1世代だけ残す）。"""
+    return lifeos(_C["health"], "Health-Manual-前回.md")
+
+
 def diary(day: str) -> str:
     return lifeos(_C["lookback"], f"{day}.md")
 
@@ -24,6 +29,14 @@ def report(name: str) -> str:
 
 def inbox() -> str:
     return lifeos(_C["private"], "Inbox.md")
+
+
+def ledger_attachment(name: str) -> str:
+    return lifeos(_C["ledger"], "attachments", name)
+
+
+def household_attachment(name: str) -> str:
+    return lifeos(_C["household"], "attachments", name)
 
 
 def private_attachment(name: str) -> str:

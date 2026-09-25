@@ -8,7 +8,6 @@ import state
 import task_dates
 import task_sync
 import util
-import writing_log
 
 MAIN_MAX = 3
 _DONE = re.compile(r"^\s*(?:完了|done|かんりょう)[\s:：]*(.+)$", re.I)
@@ -31,10 +30,9 @@ def format_task_list(tasks: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def compose_morning(tasks: list[dict], writing_block: str | None, health_line: str | None) -> str:
+def compose_morning(tasks: list[dict], health_line: str | None) -> str:
+    """朝の案内の本文。昨日の執筆実績は、当日の記録（09:44）が入ったあとの別の投稿（scheduler.post_writing）で出す。"""
     parts = [MORNING_PREFIX + " ☀️"]
-    if writing_block:
-        parts.append(writing_block)
     if health_line:
         parts.append(health_line)
     if tasks:
@@ -60,11 +58,10 @@ async def build_morning(day: date) -> tuple[str, list[dict]]:
     await asyncio.to_thread(task_sync.run_safely)
     tasks = await asyncio.to_thread(sheets.today_tasks, day)
     y = day - timedelta(days=1)
-    block = await asyncio.to_thread(writing_log.yesterday_block, day)
     score = await asyncio.to_thread(sheets.health_score_on, y)
     diary = await asyncio.to_thread(sheets.diary_on, y)
     line = health_line(score, (diary or {}).get("ご機嫌度") or None)
-    return compose_morning(tasks, block, line), tasks
+    return compose_morning(tasks, line), tasks
 
 
 async def post_list(channel, header: str | None = None) -> None:

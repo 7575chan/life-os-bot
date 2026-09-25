@@ -29,6 +29,7 @@ class FakeWorksheet:
 
     def batch_update(self, data, value_input_option=None):
         self.book.calls["batch_update"] += 1
+        self.book.last_batch = data
 
 
 class FakeBook:
@@ -90,6 +91,19 @@ def test_header_cache_refreshes_when_a_column_is_missing(book):
     sheets.append(sheets.TASKS, {"内容": "b", "存在しない列": "x"})  # 見出しにない列 → 取り直して、無視して書く
     assert book.calls["row_values"] == n + 1
     assert ws.rows[-1][HEADER.index("内容")] == "b"
+
+
+def test_update_rows_writes_many_cells_in_one_request(book):
+    sheets.add_task("a", source="t")
+    n = book.calls["batch_update"]
+    sheets.update_rows(sheets.TASKS, [(2, {"内容": "x", "優先度": "高"}), (3, {"完了": "TRUE"}), (9, {"内容": "y"})])
+    assert book.calls["batch_update"] == n + 1  # 行や列がいくつあっても、書き込みは1回
+    cells = {d["range"]: d["values"] for d in book.last_batch}
+    assert cells == {"C2": [["x"]], "G2": [["高"]], "D3": [["TRUE"]], "C9": [["y"]]}
+    sheets.update_rows(sheets.TASKS, [])
+    assert book.calls["batch_update"] == n + 1  # 空なら何も呼ばない
+    with pytest.raises(KeyError):
+        sheets.update_rows(sheets.TASKS, [(2, {"存在しない列": "x"})])
 
 
 def test_ensure_schema_drops_the_caches(book):

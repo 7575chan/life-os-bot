@@ -121,13 +121,39 @@ def stats_for(log: WritingLog, day: date) -> dict | None:
             "works": sorted(works, key=lambda w: -w["added"])}
 
 
-def format_morning(stats: dict | None, day_yesterday: date) -> str | None:
-    """朝報告の執筆実績ブロック。増えていない日・記録が無い日は何も出さない（責めない）。"""
+def period_growth(log: WritingLog, start: date, end: date, today: date) -> dict | None:
+    """[start, end) の期間の、作品ごとの増加文字数（週次・月次レポート用）。
+
+    期間の終わり（end の前日まで）の最新の記録と、期間の前（start の前日まで）の最新の記録との差。
+    期間の前の記録が無ければ、最初の記録を起点にする。期間内に記録が無ければ None。
+    マイナス（削除・推敲）は増加に含めない。起点の日付も返すので、記録の間隔が空いていれば分かる。
+    """
+    last = next((s for s in reversed(log.snaps) if s.day < end), None)
+    if last is None or last.day < start:
+        return None
+    base = next((s for s in reversed(log.snaps) if s.day < start), log.snaps[0])
+    works = []
+    for name, total in last.totals.items():
+        added = max(0, total - base.totals.get(name, 0))
+        w = log.works.get(name)
+        works.append({"name": name, "added": added, "total": total, "target": w.target if w else None,
+                      "pct": round(total / w.target * 100) if w and w.target else None,
+                      "days_left": (w.deadline - today).days if w and w.deadline and w.deadline >= today else None})
+    return {"base_day": base.day, "as_of": last.day, "total_added": sum(w["added"] for w in works),
+            "works": sorted(works, key=lambda w: -w["added"])}
+
+
+YESTERDAY_PREFIX = "📊 昨日の執筆実績"
+
+
+def format_morning(stats: dict | None, today: date) -> str | None:
+    """昨日の執筆実績の投稿文。増えていない日・記録が無い日は何も出さない（責めない）。
+
+    記録は「その時点の総文字数」なので、昨日書いた文字数 = 今日の行 − 昨日の行（`yesterday_stats`）。
+    今日の行以外の差を渡されたときは、「昨日」とは呼ばず、使った記録の日付を明示する。"""
     if not stats or stats["total_added"] <= 0:
         return None
-    lines = ["📊 昨日の執筆実績"]
-    if stats["date"] != day_yesterday:
-        lines[0] += f"（{stats['date']:%m/%d} 時点の記録）"
+    lines = [YESTERDAY_PREFIX if stats["date"] == today else f"📊 執筆実績（{stats['date']:%m/%d} 時点の記録）"]
     lines.append(f"・合計 +{stats['total_added']:,}文字")
     for w in stats["works"]:
         if w["added"] <= 0 or not w["active"]:
@@ -155,16 +181,10 @@ def fetch() -> WritingLog | None:
     return parse(w.get_all_values(value_render_option=ValueRenderOption.unformatted))
 
 
-def yesterday_block(day: date) -> str | None:
-    """day（今日）の朝報告に載せる、昨日の執筆実績。失敗しても None（朝報告を止めない）。"""
-    try:
-        log = fetch()
-        if log is None:
-            return None
-        y = day - timedelta(days=1)
-        return format_morning(stats_for(log, y), y)
-    except Exception:  # noqa: BLE001
-        return None
+def yesterday_stats(log: WritingLog, today: date) -> dict | None:
+    """昨日書いた文字数（今日の行 − 昨日の行）。**今日の行がまだ無ければ None**（別の日の差を「昨日」として出さない）。"""
+    stats = stats_for(log, today)
+    return stats if stats and stats["date"] == today else None
 
 
 # ---------------------------------------------------------------- プロジェクト部屋（10〜12）での作品の照合と進捗

@@ -56,7 +56,8 @@ async def system_prompt(extra: str = "", use_ceo: bool = True) -> str:
     if use_ceo:
         ceo = (await ceo_directives()).strip()
         if ceo:
-            parts.append("【CEO方針（最優先の判断基準。助言・優先順位づけ・分析はこれに従う）】\n" + ceo[:8000])
+            parts.append("【CEO方針（最優先の判断基準。助言・優先順位づけ・分析はこれに従う。新しい日付の方針が古い方針と食い違うときは、"
+                         "新しい方をとる）】\n" + ceo[:8000])
     if extra:
         parts.append(extra)
     return "\n\n".join(parts)
@@ -107,9 +108,12 @@ async def vision_json(images: list[tuple[bytes, str]], prompt: str, fallback, *,
     return fallback if data is None else data
 
 
-async def run_tools(prompt: str, tools: list[dict], execute, *, extra_system: str = "", max_iter: int = 8) -> str:
-    """tool_use ループ。execute(name, input) は async で JSON 化可能な値を返す。"""
-    messages = [{"role": "user", "content": prompt}]
+async def run_tools(prompt: str, tools: list[dict], execute, *, extra_system: str = "", max_iter: int = 8,
+                    history: list[dict] | None = None) -> str:
+    """tool_use ループ。execute(name, input) は async で JSON 化可能な値を返す。
+
+    history: 直前までのやりとり（{"role": "user"|"assistant", "content": 文字列} を、ユーザーから始めて交互に）。"""
+    messages = [*(history or []), {"role": "user", "content": prompt}]
     system = await system_prompt(extra_system)
     for _ in range(max_iter):
         resp = await client().messages.create(

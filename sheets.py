@@ -4,6 +4,7 @@
 列は位置ではなく**見出し行の列名**で読み書きする。チャンネルに対応しないシートには一切触れない。
 """
 import functools
+import json
 import logging
 import re
 import threading
@@ -239,6 +240,25 @@ def update_row(name: str, row: int, data: dict) -> None:
 
 
 @locked
+def update_rows(name: str, updates: list[tuple[int, dict]]) -> None:
+    """複数の行のセルを、1回の API 呼び出しでまとめて更新する（書き込みの上限を使い切らないため）。updates: [(行番号, {列名: 値})]"""
+    if not updates:
+        return
+    _require(name)
+    header = _header(name)
+    if any(k not in header for _, d in updates for k in d):
+        header = _header(name, refresh=True)
+    for _, d in updates:
+        for k in d:
+            if k not in header:
+                raise KeyError(f"{name} に列 '{k}' はありません。列: {header}")
+    ws(name).batch_update(
+        [{"range": rowcol_to_a1(row, header.index(k) + 1), "values": [[v]]} for row, d in updates for k, v in d.items()],
+        value_input_option="RAW",
+    )
+
+
+@locked
 def delete_row(name: str, row: int) -> None:
     if row < 2:
         raise ValueError("ヘッダー行は削除できません")
@@ -257,10 +277,32 @@ def between(name: str, start: date, end: date, date_col: str | None = None) -> l
     return out
 
 
+def _cell(value) -> str:
+    """操作ログのセルに入れる形。文字列はそのまま、辞書などは JSON（取り消しで読み戻せる）。"""
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
 @locked
-def log_operation(op: str, sheet: str, row: int, before, after) -> None:
-    append(OPLOG, {"日時": util.fmt_datetime(util.now()), "操作": op, "シート": sheet, "行": row,
-                   "変更前": str(before), "変更後": str(after)})
+def log_operation(op: str, sheet: str, row, before, after) -> int:
+    """`14-ai` シート（操作ログ）に1行書き、その行番号を返す。変更の**前**に呼ぶ（書けなければ変更しない）。"""
+    return append(OPLOG, {"日時": util.fmt_datetime(util.now()), "操作": op, "シート": sheet, "行": row,
+                          "変更前": _cell(before), "変更後": _cell(after)})
+
+
+@locked
+def insert_row(name: str, row: int, data: dict) -> None:
+    """row 行目に1行を挿入する（それ以降の行は1つ下がる）。見出し行（1行目）の位置には挿入できない。"""
+    if row < 2:
+        raise ValueError("ヘッダー行の位置には挿入できません")
+    _require(name)
+    header = _header(name)
+    if any(k not in header for k in data):
+        header = _header(name, refresh=True)
+    values = [""] * len(header)
+    for k, v in data.items():
+        if k in header:
+            values[header.index(k)] = v
+    ws(name).insert_row(values, index=row, value_input_option="RAW")
 
 
 # ---------------------------------------------------------------- タスク

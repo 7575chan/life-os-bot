@@ -1,5 +1,6 @@
 """`02-health`: 客観データ（スクショ）と主観メモの記録、コンディション判定、取扱マニュアル（SPEC §5）。"""
 import asyncio
+import logging
 from datetime import timedelta
 
 import claude_client
@@ -8,6 +9,9 @@ import notes
 import sheets
 import util
 import vault_paths
+
+log = logging.getLogger("life-os.health")
+MANUAL_KIND = "取扱マニュアル"  # 04-report シートの「種別」
 
 _VISION = """これは Garmin や iPhone のヘルスケアなどのスクリーンショットです。読み取れる値だけを、JSONで返してください。
 {"sleep_hours": 睡眠時間を時間の小数（例: 10時間15分 -> 10.25）か null,
@@ -110,16 +114,35 @@ _MANUAL_PROMPT = """次のデータから、ユーザーの「自分取扱マニ
 {rows}"""
 
 
-async def _manual(message) -> None:
-    today = util.today()
+async def update_manual(today) -> str:
+    """「自分取扱マニュアル」を作り直して `Health-Manual.md` に保存し、`04-report` シートに記録する。本文を返す。
+
+    `02-health` で「取扱マニュアル」と書いたときと、週次・月次レポート（`report.py`）から呼ばれる。
+    手で書いた内容を失わないよう、上書きの前に、それまでの内容を `Health-Manual-前回.md` に残す（残せなければ上書きしない）。
+    AI が空の文章を返したときも、上書きしない。"""
     health = await asyncio.to_thread(sheets.between, sheets.HEALTH, today - timedelta(days=90), today + timedelta(days=1))
     diary = await asyncio.to_thread(sheets.between, sheets.DIARY, today - timedelta(days=90), today + timedelta(days=1))
     table = health_analysis.sleep_mood_table([r for _, r in health], [r for _, r in diary])
     rows = "\n".join(f"{r['日時']} 睡眠{r['睡眠時間']}h {r['客観指標']} メモ:{r['主観メモ']} → {r['AI判定']}"
                      for _, r in health[-40:]) or "（記録がまだありません）"
-    body = await claude_client.complete(_MANUAL_PROMPT.format(th=table["threshold_hours"], table=table, rows=rows),
-                                        max_tokens=1500)
+    body = (await claude_client.complete(_MANUAL_PROMPT.format(th=table["threshold_hours"], table=table, rows=rows),
+                                         max_tokens=1500) or "").strip()
+    if not body:
+        raise ValueError("マニュアルの文章を作れませんでした")
     doc = f"# 自分取扱マニュアル\n\n更新: {util.fmt_datetime(util.now())}\n\n{body}\n"
-    await asyncio.to_thread(notes.get_store().write, vault_paths.health_manual(), doc)  # Obsidian を先に
+    store = notes.get_store()
+    old = await asyncio.to_thread(store.read, vault_paths.health_manual())
+    if old and old.strip():
+        await asyncio.to_thread(store.write, vault_paths.health_manual_previous(), old)  # 前の版を残す（失敗したら、ここで止まる）
+    await asyncio.to_thread(store.write, vault_paths.health_manual(), doc)  # Obsidian を先に
+    try:
+        await asyncio.to_thread(sheets.append, sheets.REPORTS, {"発行日": util.fmt_date(today), "種別": MANUAL_KIND, "本文": doc[:30_000]})
+    except Exception:  # noqa: BLE001  ノートには保存済み
+        log.warning("取扱マニュアルを 04-report シートに記録できませんでした", exc_info=True)
+    return body
+
+
+async def _manual(message) -> None:
+    body = await update_manual(util.today())
     await util.ack(message, "📖")
     await util.send_long(message.channel, "自分取扱マニュアルを更新しました📖\n\n" + body)

@@ -74,10 +74,10 @@ def test_only_main_when_three_or_fewer():
 
 
 def test_morning_composition_with_and_without_extras():
-    full = today_task.compose_morning(tasks_(1), "📊 昨日の執筆実績\n・合計 +1,850文字", "🩺 昨日: 体調スコア 4 / ご機嫌度 4")
-    assert full.index("📊") < full.index("🩺") < full.index("本日のメインタスク")
-    assert "3日" in full
-    empty = today_task.compose_morning([], None, None)
+    full = today_task.compose_morning(tasks_(1), "🩺 昨日: 体調スコア 4 / ご機嫌度 4")
+    assert full.index("🩺") < full.index("本日のメインタスク")
+    assert "3日" in full and "📊" not in full  # 昨日の執筆実績は、朝の案内には載せない（別の投稿）
+    empty = today_task.compose_morning([], None)
     assert "まだありません" in empty and "📊" not in empty and "遅れ" not in empty
 
 
@@ -194,5 +194,5 @@ def test_already_posted_detects_same_day_bot_post():
 
 
 def test_prefixes_are_used_in_the_actual_messages():
-    assert today_task.compose_morning([], None, None).startswith(today_task.MORNING_PREFIX)
+    assert today_task.compose_morning([], None).startswith(today_task.MORNING_PREFIX)
     assert looking_back.EVENING_PREFIX in "今日もお疲れ様でした！ 本日の記録を残しましょう🌙"
