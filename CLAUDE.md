@@ -51,7 +51,7 @@ The service account has no storage quota: it **cannot create files with content,
 
 ## Next steps
 
-Resume from `docs/NEXT_STEPS.md` (what is done, the order of remaining rooms, VM deploy steps).
+Resume from `docs/NEXT_STEPS.md`. All 14 channels are implemented; what remains is pushing, deploying to the VM, and the live-verification checklist in that file. Do not start new features before that unless the user asks.
 
 ## Architecture notes
 
