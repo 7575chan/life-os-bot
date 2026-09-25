@@ -8,6 +8,7 @@ _PATH = config.DATA_DIR / "settings.json"
 DEFAULTS = {
     "summary_length": "3行",  # 08-scrap の要約の長さ
     "idea_tags": ["小説", "TRPG", "仕事", "日常", "開発"],
+    "private_tags": ["行きたい", "買いたい", "予定", "感想", "日常"],  # 05-private のタグ候補
     "scrap_tag_count": "3〜5個",
 }
 

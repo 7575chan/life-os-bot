@@ -26,6 +26,10 @@ def inbox() -> str:
     return lifeos(_C["private"], "Inbox.md")
 
 
+def private_attachment(name: str) -> str:
+    return lifeos(_C["private"], "attachments", name)
+
+
 def scrap(name: str) -> str:
     return lifeos(_C["scrap"], f"{name}.md")
 
