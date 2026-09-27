@@ -16,7 +16,7 @@ Python（discord.py）・Claude API・Google Sheets（gspread）・Google Drive 
 |---|---|
 | `01-today-task` | 朝 8:00 のタスク案内、緊急タスクの追加、「完了 1,3」、昨日の執筆実績（10:00 以降） |
 | `02-health` | Garmin・ヘルスケアのスクショと主観メモの記録、コンディション判定、「取扱マニュアル」 |
-| `03-looking-back` | 夜 21:00 の問いかけ、日記の整形と保存、明日のタスクの選択 |
+| `03-looking-back` | 夜 23:00 の問いかけ、日記の整形と保存、明日のタスクの選択 |
 | `04-report` | 週次（日曜 20:00）・月次（月末日 20:00）レポート。投稿専用 |
 | `05-private` | 私生活メモ・独り言（静かに記録。「行きたいカフェ教えて」のときだけ返信） |
 | `06-household-accounts` | 家計簿（現金・娯楽）。今月の娯楽費の累計を返信 |
@@ -73,7 +73,7 @@ VM 用の `.env` は `scripts/make_vm_env.py` で作ります。`.env` と `cred
 | 08:00 | 朝のタスク案内（`01-today-task`） | `MORNING_TIME` |
 | 10:00 以降 | 昨日の執筆実績（執筆記録シートに当日の行が入ってから 1 回） | `WRITING_TIME` |
 | 20:00 | 日曜は週次レポート、月末日は月次レポート（`04-report`） | `REPORT_TIME` |
-| 21:00 | 夜の問いかけ（`03-looking-back`） | `EVENING_TIME` |
+| 23:00 | 夜の問いかけ（`03-looking-back`） | `EVENING_TIME` |
 | 10 分ごと | タスク棚（Obsidian）とシートの同期 | |
 
 同じ日に二重投稿しないよう、実行済みの記録とチャンネル履歴の確認をしています。

@@ -6,12 +6,15 @@
 - 「行きたいカフェ教えて」「買いたいものリスト出して」のように、過去のメモを呼び出す頼みだけ、Inbox.md の中身から返信する
   （問い合わせ自体はメモに残さない。添付がある投稿は、問い合わせでもメモとして残す）
 - 画像は `05-private/attachments/` に保存して埋め込む（09-idea と同じ処理）
+- 先頭が「やったこと」などの投稿は、その日にやったことの記録（#やったこと を付ける）。夜の 03-looking-back の問いかけに載る
 - リアクション: 📝 保存した / 💬 過去のメモに返信した / ⚠️ 保存はしたが、シートへの記録に失敗した
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from datetime import date
 
 import claude_client
 import notes
@@ -24,6 +27,9 @@ from handlers import idea
 log = logging.getLogger("life-os.private")
 
 KIND_MEMO, KIND_QUERY = "memo", "query"
+DONE_TAG = "やったこと"
+_DONE_HEAD = re.compile(r"^\s*(?:今日)?(?:やったこと|やった事|できたこと|できた事|したこと|した事)(?:\s*[:：]\s*|\s+|$)")
+_BULLET = re.compile(r"^\s*(?:[-*・•]|\[[ xX]?\])\s*")
 CONTEXT_LIMIT = 20_000
 
 _write_lock = asyncio.Lock()  # Inbox.md の「読む→書き換える」を1件ずつにする
@@ -87,6 +93,38 @@ def build_context(text: str, words: list[str], limit: int = CONTEXT_LIMIT) -> st
     return "\n\n".join(entries[i] for i in sorted(chosen)) or entries[0][:limit]
 
 
+def done_items(text: str) -> list[str] | None:
+    """先頭が「やったこと」などの投稿なら、やったことの一覧（1行1件）。そうでなければ None。"""
+    m = _DONE_HEAD.match(text or "")
+    if not m:
+        return None
+    out = []
+    for raw in text[m.end():].split("\n"):
+        line = _BULLET.sub("", raw).strip()
+        if line and not line.startswith("[添付:"):
+            out.append(line)
+    return out
+
+
+def done_on(rows: list[dict], day: date) -> list[str]:
+    """`05-private` シートの行から、その日（暦日）のやったことを投稿順に。"""
+    out: list[str] = []
+    for rec in rows:
+        if util.parse_date_any(rec.get("日時", "")) == day:
+            out += done_items(rec.get("内容", "")) or []
+    return out
+
+
+async def today_done(day: date) -> list[str]:
+    """夜の問いかけ用。シートを読めなければ空（問いかけは止めない）。"""
+    try:
+        rows = await asyncio.to_thread(sheets.records, sheets.PRIVATE)
+    except Exception:  # noqa: BLE001
+        log.warning("05-private のやったことを読めませんでした", exc_info=True)
+        return []
+    return done_on([rec for _, rec in rows], day)
+
+
 # ---------------------------------------------------------------- 処理
 
 
@@ -112,12 +150,14 @@ async def handle(message) -> None:
     if not text and not message.attachments:
         return
     now = util.now()
+    done = done_items(text) is not None
     info = await _classify(text) if text else {"kind": KIND_MEMO, "tags": [], "search": None}
-    if normalize_kind(info.get("kind"), bool(message.attachments)) == KIND_QUERY:
+    if not done and normalize_kind(info.get("kind"), bool(message.attachments)) == KIND_QUERY:
         await _answer(message, text, info)
         return
 
-    tags = idea.clean_tags(info.get("tags"), settings.get("private_tags"), idea.explicit_tags(text))
+    written = ([DONE_TAG] if done else []) + idea.explicit_tags(text)
+    tags = idea.clean_tags(info.get("tags"), settings.get("private_tags"), written)
     files = await idea._save_attachments(message, now, path_fn=vault_paths.private_attachment)
     entry = idea.format_entry(now, tags, text, files)
 

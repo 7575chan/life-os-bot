@@ -30,7 +30,7 @@ def run(coro):
 def test_plan_task_without_dates_is_todays_urgent_task():
     p = today_task.plan_task("牛乳を買う", TODAY)
     assert p == {"content": "牛乳を買う", "scheduled": "2026-09-20", "due": "", "priority": "高", "future": False,
-                 "label": "牛乳を買う"}
+                 "demoted": False, "label": "牛乳を買う"}
 
 
 def test_plan_task_today_and_due():

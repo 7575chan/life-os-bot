@@ -1,6 +1,6 @@
 """`03-looking-back`: 夜の振り返りの記録と、翌日タスクの番号選択（SPEC §5）。"""
 import asyncio
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import claude_client
 import notes
@@ -11,6 +11,7 @@ import task_sync
 import util
 import vault_paths
 import weather
+from handlers import private
 
 SOURCE = "03-looking-back"
 KIND = "backlog_choice"
@@ -37,6 +38,16 @@ def selection_target_day(now) -> date:
     return d if now.hour < 5 else d + timedelta(days=1)
 
 
+def journal_day(now: datetime) -> date:
+    """日記の日付。23:00 の問いかけに日付が変わってから答えることがあるので、5時前は前日にする。"""
+    d = now.date()
+    return d - timedelta(days=1) if now.hour < 5 else d
+
+
+def format_done(items: list[str]) -> str | None:
+    return ("✅ 今日やったこと（05-private より）：\n" + "\n".join(f"・{t}" for t in items)) if items else None
+
+
 def format_candidates(items: list[dict]) -> str:
     lines = ["📋 明日のタスク候補（バックログ）："]
     lines += [f"{i}. {t['content']}" for i, t in enumerate(items, 1)]
@@ -51,9 +62,12 @@ def _fallback(text: str) -> dict:
 
 async def prompt_text() -> str:
     w = await weather.today_weather()
+    done = format_done(await private.today_done(journal_day(util.now())))
     lines = [EVENING_PREFIX + "🌙"]
     if w:
         lines.append(f"今日の天気: {w}")
+    if done:
+        lines += ["", done, ""]
     lines.append("ご機嫌度（1〜5）と、今日のことを自由に書いてください。音声入力のテキストでも大丈夫です。")
     return "\n".join(lines)
 
@@ -101,7 +115,8 @@ async def _select(message, pending: dict, text: str) -> None:
 async def _journal(message, text: str) -> None:
     ch = message.channel
     now = util.now()
-    day = util.fmt_date(now.date())
+    base = journal_day(now)
+    day = util.fmt_date(base)
     parsed = await claude_client.complete_json(_PROMPT.format(text=text), _fallback(text))
     if not isinstance(parsed, dict):
         parsed = _fallback(text)
@@ -117,7 +132,7 @@ async def _journal(message, text: str) -> None:
                                                           "本文": formatted, "Obsidianリンク": link})
     dated = []
     for t in tomorrow:
-        ext = task_dates.extract(t, now.date())  # 「明日」「9/25まで」などが書かれていれば、実行日・期限に反映する
+        ext = task_dates.extract(t, base)  # 「明日」「9/25まで」などが書かれていれば、実行日・期限に反映する
         await asyncio.to_thread(sheets.add_task, ext.content, scheduled=task_dates.iso(ext.scheduled),
                                 due=task_dates.iso(ext.due), source=SOURCE)
         if ext.scheduled or ext.due:

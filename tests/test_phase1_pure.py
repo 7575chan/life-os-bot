@@ -58,8 +58,11 @@ def test_task_sort_key_priority_due_row():
 # ---------------------------------------------------------------- 朝の案内
 
 
-def tasks_(n):
-    return [{"id": f"lo-{i}", "content": f"タスク{i}"} for i in range(1, n + 1)]
+def tasks_(n, high=None):
+    """high 件だけ優先度「高」（メイン）。既定はすべて「高」。"""
+    high = n if high is None else high
+    return [{"id": f"lo-{i}", "content": f"タスク{i}", "priority": "高" if i <= high else "", "due": "", "row": i + 1}
+            for i in range(1, n + 1)]
 
 
 def test_main_max_three_then_sub_numbers_continue():
@@ -76,7 +79,7 @@ def test_only_main_when_three_or_fewer():
 def test_morning_composition_with_and_without_extras():
     full = today_task.compose_morning(tasks_(1), "🩺 昨日: 体調スコア 4 / ご機嫌度 4")
     assert full.index("🩺") < full.index("本日のメインタスク")
-    assert "3日" in full and "📊" not in full  # 昨日の執筆実績は、朝の案内には載せない（別の投稿）
+    assert "3日" in full and "メイン 4" in full and "📊" not in full  # 昨日の執筆実績は、朝の案内には載せない（別の投稿）
     empty = today_task.compose_morning([], None)
     assert "まだありません" in empty and "📊" not in empty and "遅れ" not in empty
 

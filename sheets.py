@@ -328,9 +328,12 @@ def _task(row: int, rec: dict) -> dict:
             "source": rec["出典"].strip()}
 
 
+_PRIORITY_RANK = {"高": 0, "中": 1, "低": 2}
+
+
 def task_sort_key(t: dict):
-    """優先度「高」→ 期限が近い順 → 登録順。"""
-    return (0 if t["priority"] == "高" else 1, t["due"] or "9999-99-99", t["row"])
+    """優先度（高 → 中 → 低 → 空）→ 期限が近い順 → 登録順。"""
+    return (_PRIORITY_RANK.get(t["priority"], 3), t["due"] or "9999-99-99", t["row"])
 
 
 @locked
@@ -422,6 +425,18 @@ def complete_tasks(ids: list[str], day: date | None = None) -> list[str]:
             update_row(TASKS, t["row"], {"完了": "TRUE", "完了日": util.fmt_date(day)})
             done.append(t["content"])
     return done
+
+
+@locked
+def set_priority(ids: list[str], priority: str) -> list[str]:
+    """未完了タスクの優先度を、1回の API 呼び出しでまとめて変える。変えたタスクの内容を返す（同じ優先度のものは変えない）。"""
+    ups, changed = [], []
+    for t in find_tasks(ids):
+        if not t["done"] and not t["deleted"] and t["priority"] != priority:
+            ups.append((t["row"], {"優先度": priority}))
+            changed.append(t["content"])
+    update_rows(TASKS, ups)
+    return changed
 
 
 @locked
