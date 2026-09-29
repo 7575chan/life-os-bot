@@ -460,6 +460,12 @@ def completed_count(start: date, end: date) -> int:
     return n
 
 
+@locked
+def completed_on(day: date) -> list[str]:
+    """完了日が day のタスクの内容（シートの行順）。夜の 03-looking-back の問いかけ用。"""
+    return [t["content"] for t in all_tasks() if t["done"] and util.parse_date_any(t["done_date"]) == day]
+
+
 # ---------------------------------------------------------------- 日記・体調
 
 
