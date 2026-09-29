@@ -197,3 +197,99 @@ def test_new_tasks_with_kind_prefix(env):
 def test_kind_word_inside_task_text_is_just_a_task(env):
     run(today_task.handle(env.message("メインディッシュを作る")))
     assert [(c, kw["priority"]) for c, kw in env.added] == [("メインディッシュを作る", "高")]
+
+
+# ---------------------------------------------------------------- 簡単な書き方（1行・1メッセージで複数指定・入れ替え）
+
+
+@pytest.mark.parametrize("text, cmds", [
+    ("メイン2", [("メイン", [2])]),
+    ("メイン 2 サブ 5", [("メイン", [2]), ("サブ", [5])]),
+    ("メイン2・サブ5", [("メイン", [2]), ("サブ", [5])]),
+    ("メイン２、サブ５", [("メイン", [2]), ("サブ", [5])]),
+    ("メイン 2,3", [("メイン", [2, 3])]),
+    ("2をメインに", [("メイン", [2])]),
+    ("2番をサブにして", [("サブ", [2])]),
+    ("2番はサブ", [("サブ", [2])]),
+    ("2をメインに、5をサブにしてください", [("メイン", [2]), ("サブ", [5])]),
+    ("2と5を入れ替え", [("入れ替え", [2, 5])]),
+    ("入れ替え 2 5", [("入れ替え", [2, 5])]),
+    ("メインタスク 4", [("メイン", [4])]),
+])
+def test_parse_kind_commands(text, cmds):
+    assert today_task.parse_kind_commands(text) == cmds
+
+
+@pytest.mark.parametrize("text", ["メインディッシュを作る", "3時にメインの資料を送る", "サブスクを解約する", "牛乳",
+                                  "サブ：洗濯", "2人で会議"])
+def test_parse_kind_commands_ignores_tasks(text):
+    assert today_task.parse_kind_commands(text) is None
+
+
+def test_line_kind_suffix_and_prefix():
+    assert today_task.line_kind("洗濯（サブ）") == ("サブ", "洗濯")
+    assert today_task.line_kind("洗濯 #サブ") == ("サブ", "洗濯")
+    assert today_task.line_kind("企画書【メイン】") == ("メイン", "企画書")
+    assert today_task.line_kind("サブ：洗濯") == ("サブ", "洗濯")
+    assert today_task.line_kind("洗濯") == (None, "洗濯")
+
+
+def test_main_and_sub_in_one_message_swaps_even_when_main_is_full(env):
+    env.tasks = [task(1, "高"), task(2, "高"), task(3, "高"), task(4), task(5)]
+    run(today_task.handle(env.message("一覧")))
+    run(today_task.handle(env.message("メイン 4 サブ 1")))
+    assert env.set_calls == [(["lo-1"], ""), (["lo-4"], "高")]
+    assert "メインにしました：\n・タスク4" in env.sent[-1] and "サブにしました：\n・タスク1" in env.sent[-1]
+    assert env.added == [] and env.reactions == ["🔀"] and env.synced == 1
+
+
+def test_no_space_command_is_not_registered_as_a_task(env):
+    env.tasks = [task(1, "高"), task(2)]
+    run(today_task.handle(env.message("一覧")))
+    run(today_task.handle(env.message("メイン2・サブ1")))
+    assert env.added == []
+    assert [t["priority"] for t in env.tasks] == ["", "高"]
+
+
+def test_swap_flips_each_number(env):
+    env.tasks = [task(1, "高"), task(2, "高"), task(3, "高"), task(4)]
+    run(today_task.handle(env.message("一覧")))
+    run(today_task.handle(env.message("1と4を入れ替えて")))
+    assert [t["priority"] for t in env.tasks] == ["", "高", "高", "高"]
+
+
+def test_natural_form_over_three_changes_nothing(env):
+    env.tasks = [task(1, "高"), task(2, "高"), task(3, "高"), task(4)]
+    run(today_task.handle(env.message("一覧")))
+    run(today_task.handle(env.message("4をメインにして")))
+    assert env.set_calls == [] and "何も変えていません" in env.sent[-1] and "メイン 4 サブ 1" in env.sent[-1]
+
+
+def test_missing_number_is_noted_but_others_apply(env):
+    env.tasks = [task(1, "高"), task(2)]
+    run(today_task.handle(env.message("一覧")))
+    run(today_task.handle(env.message("メイン 2 サブ 9")))
+    assert env.set_calls == [(["lo-2"], "高")] and "9番は見当たりませんでした" in env.sent[-1]
+
+
+def test_unreadable_command_is_not_a_task(env):
+    env.tasks = [task(1, "高"), task(2)]
+    run(today_task.handle(env.message("一覧")))
+    run(today_task.handle(env.message("メイン2 1をサブ")))
+    assert env.added == [] and env.set_calls == [] and "読み取れませんでした" in env.sent[-1]
+
+
+def test_register_as_sub_by_suffix_and_header_line(env):
+    run(today_task.handle(env.message("企画書\n洗濯（サブ）\nサブ：\n買い物\n電話")))
+    assert [(c, kw["priority"]) for c, kw in env.added] == [("企画書", "高"), ("洗濯", ""), ("買い物", ""), ("電話", "")]
+    assert "・洗濯（サブ）" in env.sent[-1]
+
+
+def test_command_and_new_task_in_one_message(env):
+    env.tasks = [task(1, "高"), task(2)]
+    run(today_task.handle(env.message("一覧")))
+    run(today_task.handle(env.message("サブ 1\n牛乳を買う")))
+    assert env.set_calls == [(["lo-1"], "")]
+    assert env.added[0][0] == "牛乳を買う" and env.added[0][1]["priority"] == "高"  # 空いたメイン枠に入る
+    assert "サブにしました" in env.sent[-1] and "今日のタスクに追加しました" in env.sent[-1]
+    assert env.reactions == ["🔀", "📝"]
