@@ -1,5 +1,6 @@
 """`03-looking-back`: 夜の振り返りの記録と、翌日タスクの番号選択（SPEC §5）。"""
 import asyncio
+import logging
 from datetime import date, datetime, timedelta
 
 import claude_client
@@ -12,6 +13,8 @@ import util
 import vault_paths
 import weather
 from handlers import private
+
+log = logging.getLogger(__name__)
 
 SOURCE = "03-looking-back"
 KIND = "backlog_choice"
@@ -48,6 +51,19 @@ def format_done(items: list[str]) -> str | None:
     return ("✅ 今日やったこと（05-private より）：\n" + "\n".join(f"・{t}" for t in items)) if items else None
 
 
+def format_completed(items: list[str]) -> str | None:
+    return ("✅ 今日完了したタスク：\n" + "\n".join(f"・{t}" for t in items)) if items else None
+
+
+async def today_completed(day: date) -> list[str]:
+    """その日に完了にしたタスク（01-today-task・Obsidian どちらで完了にしても）。読めなければ空（問いかけは止めない）。"""
+    try:
+        return await asyncio.to_thread(sheets.completed_on, day)
+    except Exception:  # noqa: BLE001
+        log.warning("今日完了したタスクを読めませんでした", exc_info=True)
+        return []
+
+
 def format_candidates(items: list[dict]) -> str:
     lines = ["📋 明日のタスク候補（バックログ）："]
     lines += [f"{i}. {t['content']}" for i, t in enumerate(items, 1)]
@@ -62,12 +78,14 @@ def _fallback(text: str) -> dict:
 
 async def prompt_text() -> str:
     w = await weather.today_weather()
-    done = format_done(await private.today_done(journal_day(util.now())))
+    day = journal_day(util.now())
+    sections = [s for s in (format_completed(await today_completed(day)),
+                            format_done(await private.today_done(day))) if s]
     lines = [EVENING_PREFIX + "🌙"]
     if w:
         lines.append(f"今日の天気: {w}")
-    if done:
-        lines += ["", done, ""]
+    if sections:
+        lines += ["", "\n\n".join(sections), ""]
     lines.append("ご機嫌度（1〜5）と、今日のことを自由に書いてください。音声入力のテキストでも大丈夫です。")
     return "\n".join(lines)
 

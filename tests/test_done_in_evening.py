@@ -184,3 +184,53 @@ def test_after_midnight_reply_goes_to_the_previous_days_diary(monkeypatch, tmp_p
     assert rows[0][1]["日付"] == "2026-09-20"
     assert (tmp_path / "06-Life-OS" / "03-looking-back").exists()
     assert added == [("電話する", {"scheduled": "2026-09-21", "due": "", "source": "03-looking-back"})]  # 日記の日の「明日」
+
+
+# ---------------------------------------------------------------- 今日完了したタスク（01-today-task）
+
+_TASK_HEAD = {"ID": "", "登録日": "2026-09-18", "内容": "", "完了": "", "実行予定日": "", "期限": "", "優先度": "",
+              "出典": "", "完了日": ""}
+
+
+def _task_row(r, tid, content, done="", done_date=""):
+    return (r, {**_TASK_HEAD, "ID": tid, "内容": content, "完了": done, "完了日": done_date})
+
+
+def test_completed_on_lists_only_tasks_completed_that_day(monkeypatch):
+    rows = [_task_row(2, "lo-1", "企画書", "TRUE", "2026-09-20"),
+            _task_row(3, "lo-2", "昨日の片付け", "TRUE", "2026-09-19"),
+            _task_row(4, "lo-3", "未完了のタスク"),
+            _task_row(5, "lo-4", "消したタスク", sheets.DELETED, "2026-09-20"),
+            _task_row(6, "lo-5", "原稿", "TRUE", "2026-09-20")]
+    monkeypatch.setattr(sheets, "records", lambda name: rows if name == sheets.TASKS else [])
+    assert sheets.completed_on(DAY) == ["企画書", "原稿"]
+
+
+def test_prompt_lists_todays_completed_tasks(monkeypatch):
+    async def fine():
+        return "晴れ"
+
+    tasks = [_task_row(2, "lo-1", "企画書", "TRUE", "2026-09-20"), _task_row(3, "lo-2", "未完了のタスク")]
+    private_rows = [(2, {"日時": "2026-09-20 09:00", "内容": "やったこと：洗濯", "タグ": "#やったこと"})]
+    monkeypatch.setattr(weather, "today_weather", fine)
+    monkeypatch.setattr(sheets, "records", lambda name: tasks if name == sheets.TASKS
+                        else private_rows if name == sheets.PRIVATE else [])
+    monkeypatch.setattr(util, "now", lambda: datetime(2026, 9, 21, 0, 30, tzinfo=config.TZ))  # 日付が変わっても前日分
+    text = run(looking_back.prompt_text())
+    assert "✅ 今日完了したタスク：\n・企画書" in text
+    assert "未完了のタスク" not in text
+    assert text.index("今日の天気") < text.index("今日完了したタスク") < text.index("今日やったこと") < text.index("ご機嫌度")
+
+
+def test_prompt_without_completed_tasks_has_no_section(monkeypatch):
+    async def none():
+        return None
+
+    def broken(name):
+        raise RuntimeError("quota")
+
+    monkeypatch.setattr(weather, "today_weather", none)
+    monkeypatch.setattr(sheets, "records", broken)
+    monkeypatch.setattr(util, "now", lambda: datetime(2026, 9, 20, 23, 0, tzinfo=config.TZ))
+    text = run(looking_back.prompt_text())
+    assert "完了したタスク" not in text and text.startswith(looking_back.EVENING_PREFIX)
