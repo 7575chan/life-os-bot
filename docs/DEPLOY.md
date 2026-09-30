@@ -197,6 +197,7 @@ sudo journalctl -u life-os-bot -f
 | `verify_relay.py` が失敗 | `GAS_RELAY_URL` と `GAS_RELAY_TOKEN`（GAS のスクリプト プロパティと同じ値か） |
 | `TypeError: 'function' object is not subscriptable`（`notes.py`） | コードの不具合（Python 3.12 などの古い Python でだけ起きる）で、修正済みです。パソコンで push し、VM で `cd ~/life-os-bot && git pull --ff-only` してから、もう一度実行します |
 | `systemctl status` が `failed` / 終了コード 3 | `journalctl -u life-os-bot -n 30` を見る。「すでに別の場所で Bot が動いています」なら、パソコン側の Bot を停止する（クラッシュ直後なら約90秒待つ） |
+| 夜の問いかけに天気の行が出ない | `cd ~/life-os-bot && .venv/bin/python weather.py` で、天気か、取れなかった原因（WARNING の行）が出る。Bot のログでは `sudo journalctl -u life-os-bot --since today \| grep 天気` |
 | 何度も再起動を繰り返す | `journalctl -u life-os-bot -n 50` のエラーを確認 |
 | Bot が反応しない | Discord のチャンネル名が `.env` の `CHANNEL_*` と一致しているか、ログにエラーが出ていないか |
 
