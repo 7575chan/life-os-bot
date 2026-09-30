@@ -4,6 +4,7 @@ import logging
 from datetime import date, datetime, timedelta
 
 import claude_client
+import done_list
 import notes
 import sheets
 import state
@@ -51,19 +52,6 @@ def format_done(items: list[str]) -> str | None:
     return ("✅ 今日やったこと（05-private より）：\n" + "\n".join(f"・{t}" for t in items)) if items else None
 
 
-def format_completed(items: list[str]) -> str | None:
-    return ("✅ 今日完了したタスク：\n" + "\n".join(f"・{t}" for t in items)) if items else None
-
-
-async def today_completed(day: date) -> list[str]:
-    """その日に完了にしたタスク（01-today-task・Obsidian どちらで完了にしても）。読めなければ空（問いかけは止めない）。"""
-    try:
-        return await asyncio.to_thread(sheets.completed_on, day)
-    except Exception:  # noqa: BLE001
-        log.warning("今日完了したタスクを読めませんでした", exc_info=True)
-        return []
-
-
 def format_candidates(items: list[dict]) -> str:
     lines = ["📋 明日のタスク候補（バックログ）："]
     lines += [f"{i}. {t['content']}" for i, t in enumerate(items, 1)]
@@ -76,10 +64,12 @@ def _fallback(text: str) -> dict:
             "wants_x": "ポスト案" in text or "X案" in text, "wants_note": "note案" in text or "noteのネタ" in text}
 
 
-async def prompt_text() -> str:
+async def build_prompt() -> tuple[str, list[str]]:
+    """夜の問いかけの本文と、載せた完了タスクの ID（朝の案内で重ねて出さないために覚える）。"""
     w = await weather.today_weather()
     day = journal_day(util.now())
-    sections = [s for s in (format_completed(await today_completed(day)),
+    completed = await done_list.completed_on(day)
+    sections = [s for s in (done_list.format_items(done_list.TODAY_TITLE, [t["content"] for t in completed]),
                             format_done(await private.today_done(day))) if s]
     lines = [EVENING_PREFIX + "🌙"]
     if w:
@@ -87,7 +77,33 @@ async def prompt_text() -> str:
     if sections:
         lines += ["", "\n\n".join(sections), ""]
     lines.append("ご機嫌度（1〜5）と、今日のことを自由に書いてください。音声入力のテキストでも大丈夫です。")
-    return "\n".join(lines)
+    return "\n".join(lines), [t["id"] for t in completed]
+
+
+async def prompt_text() -> str:
+    return (await build_prompt())[0]
+
+
+async def diary_lists(day: date) -> str:
+    """日記に書き足す「今日完了したタスク」「今日やったこと」（その日の日記にまだ書いていない分だけ）。"""
+    parts = []
+    for kind, title, items in (
+            ("tasks", "### ✅ 今日完了したタスク", [t["content"] for t in await done_list.completed_on(day)]),
+            ("done", "### ✅ 今日やったこと", await private.today_done(day))):
+        new = done_list.diary_new(day, kind, items)
+        if new:
+            parts.append(title + "\n" + "\n".join(f"- {i}" for i in new))
+    return "\n\n".join(parts)
+
+
+def remember_diary_lists(day: date, text: str) -> None:
+    """書いた一覧を覚える（Obsidian に書けたあとで呼ぶ）。"""
+    kind = None
+    for line in text.splitlines():
+        if line.startswith("### "):
+            kind = "tasks" if "タスク" in line else "done"
+        elif line.startswith("- ") and kind:
+            done_list.remember_diary(day, kind, [line[2:]])
 
 
 async def handle(message) -> None:
@@ -144,8 +160,13 @@ async def _journal(message, text: str) -> None:
     w = await weather.today_weather() or ""
 
     # Obsidian を先に書く（失敗したらシートには記録しない）
+    lists = await diary_lists(base)  # 今日完了したタスク・今日やったことも日記に残す（まだ書いていない分だけ）
     entry = f"## {now:%H:%M}\n" + (f"ご機嫌度: {mood}\n" if mood else "") + (f"天気: {w}\n" if w else "") + "\n" + formatted
+    if lists:
+        entry += "\n\n" + lists
     link = await asyncio.to_thread(notes.get_store().append_entry, vault_paths.diary(day), entry, day)
+    if lists:
+        remember_diary_lists(base, lists)
     await asyncio.to_thread(sheets.append, sheets.DIARY, {"日付": day, "ご機嫌度": mood or "", "天気": w,
                                                           "本文": formatted, "Obsidianリンク": link})
     dated = []

@@ -4,6 +4,7 @@ import re
 import unicodedata
 from datetime import date, timedelta
 
+import done_list
 import sheets
 import state
 import task_dates
@@ -76,11 +77,17 @@ def format_task_list(tasks: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def compose_morning(tasks: list[dict], health_line: str | None) -> str:
-    """朝の案内の本文。昨日の執筆実績は、当日の記録（09:44）が入ったあとの別の投稿（scheduler.post_writing）で出す。"""
+def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[str] | None = None) -> str:
+    """朝の案内の本文。昨日の執筆実績は、当日の記録（09:44）が入ったあとの別の投稿（scheduler.post_writing）で出す。
+
+    overnight: 前日の夜の問いかけのあと（〜今朝）に完了したタスク。夜の問いかけに載らなかった分をここで出す。
+    """
     parts = [MORNING_PREFIX + " ☀️"]
     if health_line:
         parts.append(health_line)
+    done = done_list.format_items(done_list.OVERNIGHT_TITLE, overnight or [])
+    if done:
+        parts.append(done)
     if tasks:
         parts.append(format_task_list(tasks))
         parts.append(f"（※未完了のタスクは、3日たつとバックログへ静かに移ります。{HINT}）")
@@ -107,7 +114,7 @@ async def build_morning(day: date) -> tuple[str, list[dict]]:
     score = await asyncio.to_thread(sheets.health_score_on, y)
     diary = await asyncio.to_thread(sheets.diary_on, y)
     line = health_line(score, (diary or {}).get("ご機嫌度") or None)
-    return compose_morning(tasks, line), tasks
+    return compose_morning(tasks, line, await done_list.overnight_done(day)), tasks
 
 
 async def post_list(channel, header: str | None = None) -> None:
@@ -289,7 +296,10 @@ async def handle(message) -> None:
             return
         await asyncio.to_thread(task_sync.run_safely)
         await util.ack(message, "✅")
-        await post_list(channel, "✅ 完了にしました！\n" + "\n".join(f"・{c}" for c in done) + "\nおつかれさまです。")
+        header = "✅ 完了にしました！\n" + "\n".join(f"・{c}" for c in done) + "\nおつかれさまです。"
+        so_far = done_list.format_items(done_list.SO_FAR_TITLE,  # 今日完了したものを毎回全部見せる（件数は出さない）
+                                        [t["content"] for t in await done_list.completed_on(util.today())])
+        await post_list(channel, header + (f"\n\n{so_far}" if so_far else ""))
         return
     # 1行ずつ: 番号でメイン/サブを変える命令か、タスク（1行1タスク。「サブ：」「（サブ）」などで区分を指定できる）
     cmds: list[tuple[str, list[int]]] = []

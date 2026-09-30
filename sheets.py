@@ -461,9 +461,19 @@ def completed_count(start: date, end: date) -> int:
 
 
 @locked
+def completed_between(start: date, end: date) -> list[dict]:
+    """完了日が start 以上 end 未満のタスク（シートの行順）。「削除」の行は含まない。"""
+    out = []
+    for t in all_tasks():
+        d = util.parse_date_any(t["done_date"])
+        if t["done"] and d and start <= d < end:
+            out.append(t)
+    return out
+
+
 def completed_on(day: date) -> list[str]:
-    """完了日が day のタスクの内容（シートの行順）。夜の 03-looking-back の問いかけ用。"""
-    return [t["content"] for t in all_tasks() if t["done"] and util.parse_date_any(t["done_date"]) == day]
+    """完了日が day のタスクの内容（シートの行順）。"""
+    return [t["content"] for t in completed_between(day, day + timedelta(days=1))]
 
 
 # ---------------------------------------------------------------- 日記・体調

@@ -11,6 +11,7 @@ from discord.ext import tasks
 
 import asyncio
 import config
+import done_list
 import report
 import state
 import task_sync
@@ -75,7 +76,9 @@ async def post_evening(force: bool = False) -> bool:
     if not force and await _posted_today(ch, looking_back.EVENING_PREFIX, day):
         log.info("夜の問いかけは、別の場所ですでに投稿されているため、投稿しません")
         return False
-    await ch.send(await looking_back.prompt_text())
+    text, shown = await looking_back.build_prompt()
+    await ch.send(text)
+    done_list.remember_evening(looking_back.journal_day(util.now()), shown)  # 朝の案内で、載せた分を重ねて出さない
     return True
 
 
