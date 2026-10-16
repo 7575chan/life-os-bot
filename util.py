@@ -20,6 +20,26 @@ def today() -> date:
     return now().date()
 
 
+def activity_day(at: datetime | None = None) -> date:
+    """活動日（SPEC §7「1日の区切り」）: DAY_START_HOUR（既定 5時）より前は前日の続きとして扱う。"""
+    at = at or now()
+    return (at - timedelta(hours=config.DAY_START_HOUR)).date()
+
+
+_TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
+
+
+def activity_day_of(value) -> date | None:
+    """'2026-10-02 00:30' → 2026-10-01（5時前は前日）。時刻が無ければ日付のまま。"""
+    d = parse_date_any(value)
+    if d is None:
+        return None
+    m = _TIME_RE.search(str(value)[DATE_RE.search(str(value)).end():])
+    if m and int(m.group(1)) < config.DAY_START_HOUR:
+        return d - timedelta(days=1)
+    return d
+
+
 def fmt_date(d: date) -> str:
     return d.strftime("%Y-%m-%d")
 

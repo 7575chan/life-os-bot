@@ -283,7 +283,7 @@ async def handle_room(room_key: str, message) -> None:
     task = str(info.get("task") or "").strip()
     if task and kind in ("次やる", "後回し") and record_note:
         try:
-            ext = task_dates.extract(task, now.date())
+            ext = task_dates.extract(task, util.activity_day(now))
             await asyncio.to_thread(sheets.add_task, task_text(work, ext.content), scheduled=task_dates.iso(ext.scheduled),
                                     due=task_dates.iso(ext.due), priority="高" if kind == "次やる" else "",
                                     source=vault_paths.room(room_key).rsplit("/", 1)[-1])

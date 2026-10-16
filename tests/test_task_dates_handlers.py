@@ -54,6 +54,7 @@ def test_plan_task_future_scheduled_is_not_urgent():
 def today_env(monkeypatch):
     e = NS(added=[], sent=[], reactions=[])
     monkeypatch.setattr(util, "today", lambda: TODAY)
+    monkeypatch.setattr(util, "activity_day", lambda at=None: TODAY)
     monkeypatch.setattr(sheets, "add_task", lambda content, **kw: e.added.append((content, kw)) or "lo-x")
     monkeypatch.setattr(sheets, "today_tasks", lambda day: [])
     monkeypatch.setattr(task_sync, "run_safely", lambda: None)

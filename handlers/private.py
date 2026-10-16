@@ -107,10 +107,10 @@ def done_items(text: str) -> list[str] | None:
 
 
 def done_on(rows: list[dict], day: date) -> list[str]:
-    """`05-private` シートの行から、その日（暦日）のやったことを投稿順に。"""
+    """`05-private` シートの行から、その日（活動日。5時前の投稿は前日。SPEC §7）のやったことを投稿順に。"""
     out: list[str] = []
     for rec in rows:
-        if util.parse_date_any(rec.get("日時", "")) == day:
+        if util.activity_day_of(rec.get("日時", "")) == day:
             out += done_items(rec.get("内容", "")) or []
     return out
 

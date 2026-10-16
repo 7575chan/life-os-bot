@@ -119,7 +119,7 @@ async def build_morning(day: date) -> tuple[str, list[dict]]:
 
 async def post_list(channel, header: str | None = None) -> None:
     """現在の今日のタスクを投稿し、番号に対応する状態を保存する。"""
-    tasks = ordered(await asyncio.to_thread(sheets.today_tasks, util.today()))
+    tasks = ordered(await asyncio.to_thread(sheets.today_tasks, util.activity_day()))
     body = (format_task_list(tasks) + f"\n\n（{HINT}）") if tasks else "今日のタスクは、今のところありません。"
     msg = await util.send_long(channel, (header + "\n\n" if header else "") + body)
     state.put_pending(msg.id, channel.id, "today_list", {"items": [{"id": t["id"], "content": t["content"]} for t in tasks]})
@@ -130,7 +130,7 @@ async def _items(channel) -> list[dict]:
     pending = state.latest_pending(channel.id, "today_list", max_age_hours=36)
     if pending:
         return pending["payload"]["items"]
-    return [{"id": t["id"], "content": t["content"]} for t in ordered(await asyncio.to_thread(sheets.today_tasks, util.today()))]
+    return [{"id": t["id"], "content": t["content"]} for t in ordered(await asyncio.to_thread(sheets.today_tasks, util.activity_day()))]
 
 
 def plan_task(line: str, today: date, main_free: int = MAIN_MAX, kind: str | None = None) -> dict:
@@ -230,7 +230,7 @@ def plan_kinds(cmds: list[tuple[str, list[int]]], items: list[dict], current: di
 async def _apply_kinds(channel, cmds: list[tuple[str, list[int]]]) -> tuple[str, bool]:
     """(返信の文, 変更したか)。メインが3件を超えるなら何も変えない（一部だけ反映しない）。"""
     items = await _items(channel)
-    current = {t["id"]: t for t in await asyncio.to_thread(sheets.today_tasks, util.today())}
+    current = {t["id"]: t for t in await asyncio.to_thread(sheets.today_tasks, util.activity_day())}
     plan = plan_kinds(cmds, items, current)
     if not plan["found"]:
         return "その番号のタスクは見当たりませんでした。もう一度どうぞ。", False
@@ -253,7 +253,7 @@ async def _apply_kinds(channel, cmds: list[tuple[str, list[int]]]) -> tuple[str,
 
 async def _add_tasks(entries: list[tuple[str | None, str]]) -> str:
     """今日絶対やる緊急タスクを登録する。実行日が今日以前なら、メインの空きを上の行から埋める。"""
-    today = util.today()
+    today = util.activity_day()
     current = await asyncio.to_thread(sheets.today_tasks, today)
     main_free = MAIN_MAX - sum(1 for t in current if t["priority"] == MAIN)
     added, future, demoted = [], False, False
@@ -298,7 +298,7 @@ async def handle(message) -> None:
         await util.ack(message, "✅")
         header = "✅ 完了にしました！\n" + "\n".join(f"・{c}" for c in done) + "\nおつかれさまです。"
         so_far = done_list.format_items(done_list.SO_FAR_TITLE,  # 今日完了したものを毎回全部見せる（件数は出さない）
-                                        [t["content"] for t in await done_list.completed_on(util.today())])
+                                        [t["content"] for t in await done_list.completed_on(util.activity_day())])
         await post_list(channel, header + (f"\n\n{so_far}" if so_far else ""))
         return
     # 1行ずつ: 番号でメイン/サブを変える命令か、タスク（1行1タスク。「サブ：」「（サブ）」などで区分を指定できる）

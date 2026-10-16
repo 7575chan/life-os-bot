@@ -169,7 +169,7 @@ async def handle(message) -> None:
     task = str(info.get("task") or "").strip()
     if task:
         try:
-            ext = task_dates.extract(task, now.date())  # 「明日までに電話する」なら期限を設定する
+            ext = task_dates.extract(task, util.activity_day(now))  # 「明日までに電話する」なら期限を設定する
             await asyncio.to_thread(sheets.add_task, ext.content, scheduled=task_dates.iso(ext.scheduled),
                                     due=task_dates.iso(ext.due), source=SOURCE)
             await asyncio.to_thread(task_sync.run_safely)

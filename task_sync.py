@@ -212,7 +212,7 @@ def run(store=None) -> dict:
             text = store.read(TASK_FILE) or ""
             sheet_tasks = sheets.all_tasks()
             snapshot = json.loads(state.get_kv(SNAPSHOT_KEY, "{}"))
-            p = plan(text, sheet_tasks, snapshot, util.today())
+            p = plan(text, sheet_tasks, snapshot, util.activity_day())  # 完了日の補完などは活動日（SPEC §7）
             if p.file_changed:
                 if store.modified(TASK_FILE) != before:  # 読み込み後に Obsidian 側で編集された → 再計算
                     log.info("task file changed during sync; retry %d", attempt + 1)
