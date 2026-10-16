@@ -80,6 +80,7 @@ def test_evening_remembers_shown_and_morning_lists_the_rest(monkeypatch, kv, she
     monkeypatch.setattr(weather, "today_weather", no_weather)
     monkeypatch.setattr(util, "now", lambda: datetime(2026, 9, 20, 23, 0, tzinfo=config.TZ))
     monkeypatch.setattr(util, "today", lambda: DAY)
+    monkeypatch.setattr(util, "activity_day", lambda at=None: DAY)
     monkeypatch.setattr(state, "mark_done", lambda key: True)
     sent = []
 
@@ -120,6 +121,7 @@ def test_unreadable_sheet_gives_empty_lists(monkeypatch, kv):
 def test_complete_reply_lists_everything_done_today(monkeypatch, sheet):
     sheet.tasks = [row(2, "a", "朝の散歩", "TRUE", "2026-09-20"), row(3, "b", "企画書", scheduled="2026-09-20")]
     monkeypatch.setattr(util, "today", lambda: DAY)
+    monkeypatch.setattr(util, "activity_day", lambda at=None: DAY)
     monkeypatch.setattr(util, "now", lambda: datetime(2026, 9, 20, 23, 30, tzinfo=config.TZ))
 
     def complete(ids, day=None):

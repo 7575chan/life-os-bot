@@ -82,6 +82,7 @@ def test_plan_task_main_slots_and_kinds():
 def env(monkeypatch):
     e = NS(tasks=[], added=[], sent=[], reactions=[], set_calls=[], pending=None, synced=0)
     monkeypatch.setattr(util, "today", lambda: TODAY)
+    monkeypatch.setattr(util, "activity_day", lambda at=None: TODAY)
     monkeypatch.setattr(sheets, "today_tasks", lambda day: [dict(t) for t in e.tasks])
 
     def add_task(content, **kw):

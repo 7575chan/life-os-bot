@@ -114,7 +114,7 @@ def writing_due(now, at, hours: int = WRITING_WINDOW_HOURS) -> bool:
 async def post_writing(force: bool = False) -> bool:
     """昨日書いた文字数（執筆記録シートの、今日の行 − 昨日の行）を 01-today-task に投稿する。
 
-    記録は毎日 09:44 前後なので、朝 08:00 の案内には載せられない。WRITING_TIME（既定 10:00）から、今日の行が入るまで
+    記録は毎日 09:44 前後なので、朝 09:00 の案内には載せられない。WRITING_TIME（既定 10:00）から、今日の行が入るまで
     10分ごとに確認し、入ったら1回だけ投稿する。増えていない日・記録が無い日は投稿しない（責めない）。"""
     day = util.today()
     key = f"writing:{day}"

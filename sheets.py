@@ -359,7 +359,7 @@ def all_tasks() -> list[dict]:
 def add_task(content: str, scheduled: str = "", due: str = "", priority: str = "", source: str = "",
              task_id: str | None = None, done: bool = False, done_date: str = "", created: str | None = None) -> str:
     tid = task_id or new_task_id()
-    append(TASKS, {"ID": tid, "登録日": created or util.fmt_date(util.today()), "内容": content,
+    append(TASKS, {"ID": tid, "登録日": created or util.fmt_date(util.activity_day()), "内容": content,
                    "完了": "TRUE" if done else "", "実行予定日": scheduled, "期限": due, "優先度": priority,
                    "出典": source, "完了日": done_date})
     return tid
@@ -418,7 +418,7 @@ def schedule_tasks(ids: list[str], day: date) -> list[str]:
 
 @locked
 def complete_tasks(ids: list[str], day: date | None = None) -> list[str]:
-    day = day or util.today()
+    day = day or util.activity_day()  # 完了日は活動日（SPEC §7。深夜 0〜5時の完了は前日）
     done = []
     for t in find_tasks(ids):
         if not t["done"] and not t["deleted"]:

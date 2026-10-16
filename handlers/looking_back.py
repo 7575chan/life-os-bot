@@ -37,15 +37,13 @@ _PROMPT = """次は、ユーザーが夜の振り返りとして投稿した文�
 
 
 def selection_target_day(now) -> date:
-    """深夜（5時前）の選択は「今日」、それ以外は「明日」の予定日にする。"""
-    d = now.date()
-    return d if now.hour < 5 else d + timedelta(days=1)
+    """番号選択で予定を入れる日 = 活動日の翌日（深夜 5時前の選択は、暦の上では「今日」）。"""
+    return util.activity_day(now) + timedelta(days=1)
 
 
 def journal_day(now: datetime) -> date:
-    """日記の日付。23:00 の問いかけに日付が変わってから答えることがあるので、5時前は前日にする。"""
-    d = now.date()
-    return d - timedelta(days=1) if now.hour < 5 else d
+    """日記の日付 = 活動日（SPEC §7。23:00 の問いかけに日付が変わってから答えても、5時前は前日）。"""
+    return util.activity_day(now)
 
 
 def format_done(items: list[str]) -> str | None:
@@ -142,7 +140,7 @@ async def _select(message, pending: dict, text: str) -> None:
         return
     await asyncio.to_thread(task_sync.run_safely)
     await util.ack(message, "✅")
-    label = "明日" if day > util.today() else "今日"
+    label = "明日" if day > util.today() else "今日"  # 暦の上で「明日」か（深夜の選択は「今日」）
     await ch.send(f"✅ {label}のタスクにセットしました：\n" + "\n".join(f"・{c}" for c in done) + "\nおやすみなさい🌙")
 
 
