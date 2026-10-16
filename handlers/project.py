@@ -26,7 +26,7 @@ import task_sync
 import util
 import vault_paths
 import writing_log
-from handlers import idea
+from handlers import idea, works_cmd
 
 log = logging.getLogger("life-os.project")
 
@@ -228,6 +228,8 @@ async def handle_room(room_key: str, message) -> None:
     cfg = ROOMS[room_key]
     text = (message.content or "").strip()
     if not text and not message.attachments:
+        return
+    if text and await works_cmd.handle(message, text):  # 作品管理シートのコマンド（ノートには追記しない）
         return
     store = notes.get_store()
     now = util.now()

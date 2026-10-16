@@ -86,6 +86,16 @@ def check_sheets():
                 report(tab in tabs, f"タブ「{tab}」の存在", "" if tab in tabs else f"(タブ一覧: {tabs[:6]})")
         except Exception as e:  # noqa: BLE001
             report(False, f"{label} を開く", f"({type(e).__name__}: {str(e)[:140]})")
+    if config.WORKS_SHEET_ID:  # 作品管理シート（任意。読むだけで、何も書かない）
+        try:
+            ws = gc.open_by_key(config.WORKS_SHEET_ID).worksheet(config.WORKS_TAB)
+            header = [h.strip() for h in ws.row_values(1)]
+            report(True, f"作品管理シートのタブ「{config.WORKS_TAB}」を開く")
+            need = ["タイトル", "今やる？", "工程", "ストップ理由", "最終更新日"]
+            miss = [h for h in need if h not in header]
+            report(not miss, "作品管理シートの見出し", f"(見当たらない列: {miss})" if miss else "")
+        except Exception as e:  # noqa: BLE001
+            report(False, "作品管理シートを開く", f"({type(e).__name__}: {str(e)[:140]})")
 
 
 def main() -> int:

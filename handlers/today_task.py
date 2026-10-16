@@ -1,5 +1,6 @@
 """`01-today-task`: 朝の案内、今日のタスクの表示、緊急タスクの追加、完了の記録、メインとサブの入れ替え（SPEC §5）。"""
 import asyncio
+import logging
 import re
 import unicodedata
 from datetime import date, timedelta
@@ -10,6 +11,9 @@ import state
 import task_dates
 import task_sync
 import util
+import works
+
+log = logging.getLogger("life-os.today_task")
 
 MAIN_MAX = 3
 MAIN = "高"  # メイン = 優先度「高」（Obsidian の ⏫）。サブ = それ以外（SPEC §5 01-today-task）
@@ -77,7 +81,8 @@ def format_task_list(tasks: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[str] | None = None) -> str:
+def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[str] | None = None,
+                    projects: str | None = None) -> str:
     """朝の案内の本文。昨日の執筆実績は、当日の記録（09:44）が入ったあとの別の投稿（scheduler.post_writing）で出す。
 
     overnight: 前日の夜の問いかけのあと（〜今朝）に完了したタスク。夜の問いかけに載らなかった分をここで出す。
@@ -88,6 +93,8 @@ def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[
     done = done_list.format_items(done_list.OVERNIGHT_TITLE, overnight or [])
     if done:
         parts.append(done)
+    if projects:  # 📂 今やるプロジェクト（作品管理シート。SPEC §5）
+        parts.append(projects)
     if tasks:
         parts.append(format_task_list(tasks))
         parts.append(f"（※未完了のタスクは、3日たつとバックログへ静かに移ります。{HINT}）")
@@ -114,7 +121,20 @@ async def build_morning(day: date) -> tuple[str, list[dict]]:
     score = await asyncio.to_thread(sheets.health_score_on, y)
     diary = await asyncio.to_thread(sheets.diary_on, y)
     line = health_line(score, (diary or {}).get("ご機嫌度") or None)
-    return compose_morning(tasks, line, await done_list.overnight_done(day)), tasks
+    return compose_morning(tasks, line, await done_list.overnight_done(day), await projects_section(day)), tasks
+
+
+async def projects_section(day: date) -> str | None:
+    """朝の案内の「📂 今やるプロジェクト」。作品管理シートが未設定・読めないときは省く。"""
+    if not works.enabled():
+        return None
+    try:
+        projects = await asyncio.to_thread(works.load, True)
+        tasks = await asyncio.to_thread(sheets.all_tasks) if any(works.is_continuing(p) for p in works.now_projects(projects)) else []
+        return works.morning_section(projects, tasks, day)
+    except Exception:  # noqa: BLE001
+        log.warning("作品管理シートを読めませんでした（朝の案内では省きます）", exc_info=True)
+        return None
 
 
 async def post_list(channel, header: str | None = None) -> None:
@@ -295,6 +315,8 @@ async def handle(message) -> None:
             await channel.send("その番号のタスクは見当たりませんでした。もう一度どうぞ。")
             return
         await asyncio.to_thread(task_sync.run_safely)
+        if works.enabled():  # プロジェクトのタスクなら、作品管理シートの最終更新日を書く（失敗しても止めない）
+            await asyncio.to_thread(lambda: works.touch_tasks(sheets.find_tasks(ids)))
         await util.ack(message, "✅")
         header = "✅ 完了にしました！\n" + "\n".join(f"・{c}" for c in done) + "\nおつかれさまです。"
         so_far = done_list.format_items(done_list.SO_FAR_TITLE,  # 今日完了したものを毎回全部見せる（件数は出さない）
