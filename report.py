@@ -18,6 +18,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+import body_data
 import claude_client
 import health_analysis
 import notes
@@ -103,6 +104,8 @@ class Data:
     projects: dict = field(default_factory=dict)  # 部屋 -> records
     tasks_done: int | None = None
     writing: writing_log.WritingLog | None = None
+    garmin: list = field(default_factory=list)  # body_data.parse の形（Garmin と Habitify の記録。別のブック）
+    habitify: list = field(default_factory=list)
     missing: list = field(default_factory=list)  # 読み取れなかったデータの名前（レポートに書く）
 
 
@@ -127,6 +130,8 @@ def collect(period: Period, today: date) -> Data:
         d.projects[key] = read(ROOM_LABELS[key] + "プロジェクト", lambda n=name: sheets.records(n), [])
     d.tasks_done = read("タスク", lambda: sheets.completed_count(period.start, period.end), None)
     d.writing = read("執筆記録", writing_log.fetch, None)
+    if body_data.enabled():  # 未設定なら読まない（「読み取れなかった」とも書かない）
+        d.garmin, d.habitify = read("Garmin と Habitify の記録", body_data.load, ([], []))
     return d
 
 
@@ -193,6 +198,8 @@ def section_health(d: Data, p: Period) -> list[str]:
     other = _moods([r for r in diary_t if r.get("天気") and "雨" not in str(r.get("天気", ""))])
     if len(rain) >= MIN_GROUP_DAYS and len(other) >= MIN_GROUP_DAYS:
         lines.append(f"直近{TREND_DAYS}日の傾向: 雨の日のご機嫌度 {_avg(rain)}（{len(rain)}日） / 雨以外 {_avg(other)}（{len(other)}日）")
+    if d.garmin or d.habitify:  # Garmin と Habitify（SPEC §5 02-health）
+        lines += body_data.analyze(d.garmin, d.habitify, [r for _, r in d.diary], p.end)
     return lines
 
 

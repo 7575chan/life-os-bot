@@ -60,6 +60,12 @@ REPORT_TIME = _parse_time(os.getenv("REPORT_TIME", "20:00"))
 # 1日の区切り（SPEC §7）。この時刻より前は前日の続き（活動日）として扱う
 DAY_START_HOUR = int(os.getenv("DAY_START_HOUR", "5"))
 WRITING_TIME = _parse_time(os.getenv("WRITING_TIME", "10:00"))
+# Garmin と Habitify の記録（ユーザーの GAS が書く別のブック。Bot は読むだけ。SPEC §5 02-health）
+GARMIN_SHEET_ID = os.getenv("GARMIN_SHEET_ID", "")
+GARMIN_TAB = os.getenv("GARMIN_TAB", "Garmin")
+HABITIFY_TAB = os.getenv("HABITIFY_TAB", "Habitify")
+HABITIFY_EXERCISE = [x.strip() for x in os.getenv("HABITIFY_EXERCISE", "運動をする,スクワットをする").split(",") if x.strip()]
+HABITIFY_SKIP = [x.strip() for x in os.getenv("HABITIFY_SKIP", "執筆").split(",") if x.strip()]
 # プロジェクトボード（04-report に毎日1回。SPEC §5 03_CREATIVE「プロジェクトボード」）。朝の案内の少しあと
 BOARD_TIME = _parse_time(os.getenv("BOARD_TIME", "09:05"))
 

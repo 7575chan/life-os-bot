@@ -96,6 +96,15 @@ def check_sheets():
             report(not miss, "作品管理シートの見出し", f"(見当たらない列: {miss})" if miss else "")
         except Exception as e:  # noqa: BLE001
             report(False, "作品管理シートを開く", f"({type(e).__name__}: {str(e)[:140]})")
+    if config.GARMIN_SHEET_ID:  # Garmin と Habitify の記録（任意。GAS が書き、Bot は読むだけ）
+        try:
+            book = gc.open_by_key(config.GARMIN_SHEET_ID)
+            tabs = [w.title for w in book.worksheets()]
+            report(True, "Garmin と Habitify の記録のブックを開く")
+            for tab in (config.GARMIN_TAB, config.HABITIFY_TAB):
+                report(tab in tabs, f"タブ「{tab}」の存在", "" if tab in tabs else "(GAS の importGarmin をまだ実行していないかもしれません)")
+        except Exception as e:  # noqa: BLE001
+            report(False, "Garmin と Habitify の記録を開く", f"({type(e).__name__}: {str(e)[:140]})")
 
 
 def main() -> int:
