@@ -292,3 +292,16 @@ def test_sort_pending_does_not_eat_new_tasks(env, monkeypatch):
 def test_morning_sort_hint():
     assert today_task.SORT_HINT in today_task.compose_morning([], None, day=SAT, sort_hint=True)
     assert "整理" not in today_task.compose_morning([], None, day=SAT)
+
+
+def test_plan_ok_creates_tasks_from_project_next_steps(env, monkeypatch):
+    added = []
+    monkeypatch.setattr(sheets, "add_task", lambda content, **kw: added.append((content, kw)) or "lo-n")
+    monkeypatch.setattr(works, "enabled", lambda: True)
+    monkeypatch.setattr(works, "load", lambda refresh=False: [
+        {"row": 2, "no": 4, "title": "M.M.5s", "kind": "TRPG", "now": True, "status": "製作中", "stage": "校正01",
+         "next": "導入を推敲", "deadline": "", "stop": "", "chars": None, "target": None, "updated": ""}])
+    run(today_task.handle(env.message("来週の計画")))
+    assert "M.M.5s｜導入を推敲" in env.sent[-1]
+    run(today_task.handle(env.message("OK")))
+    assert added == [("M.M.5s｜導入を推敲", {"scheduled": "2026-10-19", "source": "作品#4"})]

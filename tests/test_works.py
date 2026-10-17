@@ -12,17 +12,19 @@ import sheets
 import stages
 import state
 import task_sync
+import board
 import util
 import works
 from handlers import project, today_task, works_cmd
 
 DAY = date(2026, 10, 16)  # 金曜
 HEADER = ["#", "今やる？", "プロジェクト", "タイトル", "状況", "完了度", "現在の文字数", "残り文字数", "目標文字数", "工程",
-          "ストップ理由", "URL", "シート", "優先順位", "重要度", "収益化", "最終更新日"]
+          "ストップ理由", "URL", "シート", "優先順位", "重要度", "収益化", "最終更新日", "次やること", "締切"]
 
 
-def row(no, now, kind, title, status="素材あり", stage="", chars="", target="", stop="", sheet_url=""):
-    return [str(no), now, kind, title, status, "", chars, "", target, stage, stop, "", sheet_url, "中", "", "低", "2026/09/06"]
+def row(no, now, kind, title, status="素材あり", stage="", chars="", target="", stop="", sheet_url="", next_="", deadline=""):
+    return [str(no), now, kind, title, status, "", chars, "", target, stage, stop, "", sheet_url, "中", "", "低", "2026/09/06",
+            next_, deadline]
 
 
 VALUES = [HEADER,
@@ -218,6 +220,13 @@ def env(ws, monkeypatch, tmp_path):
     monkeypatch.setattr(sheets, "add_task", add_task)
     monkeypatch.setattr(sheets, "all_tasks", lambda: list(e.tasks))
     monkeypatch.setattr(task_sync, "run_safely", lambda: None)
+    e.refreshed = 0
+
+    async def refresh(force=False):
+        e.refreshed += 1
+        return None
+
+    monkeypatch.setattr(board, "refresh", refresh)
     monkeypatch.setattr(state, "put_pending", lambda mid, cid, kind, payload: e.pending.update(
         {mid: {"message_id": mid, "channel_id": cid, "kind": kind, "payload": payload}}))
     monkeypatch.setattr(state, "get_pending", lambda mid: e.pending.get(mid))
@@ -304,9 +313,9 @@ def test_task_ideas_and_selection(env, monkeypatch):
     assert "1. 導入のファイルを開く" in env.sent[-1] and "4つ目" not in env.sent[-1]
     mid = list(env.pending)[-1]
     assert cmd(env, "1, 3", ref=mid)
-    assert env.added == [("M.M.5s｜導入のファイルを開く", {"source": "作品#4"}),
-                         ("M.M.5s｜NPCの台詞を見直す", {"source": "作品#4"})]
-    assert env.pending == {} and env.reactions[-1] == "📋"
+    assert env.added == []  # 日付のないタスクは増やさない（プロジェクトボード）
+    assert env.ws.values[1][17] == "導入のファイルを開く" and "最初の番号" in env.sent[-1]
+    assert env.pending == {} and env.reactions[-1] == "📂" and env.refreshed == 1
 
 
 def test_task_ideas_none(env, monkeypatch):
@@ -386,3 +395,66 @@ def test_complete_touches_project(monkeypatch):
 
     run(today_task.handle(NS(content="完了 1", channel=NS(id=1, send=send), add_reaction=react)))
     assert [t["id"] for t in touched] == ["a"]
+
+
+# ---------------------------------------------------------------- プロジェクトボード（次やること・今日やる・やる日・締切）
+
+
+def test_next_column_and_deadline_are_read(ws):
+    ws.values[1][17], ws.values[1][18] = "導入を推敲", "2026/11/15"
+    p = works.load(refresh=True)[0]
+    assert (p["next"], p["deadline"]) == ("導入を推敲", "2026/11/15")
+    with pytest.raises(ValueError):
+        works.write(p, "テスト", **{works.COL_DEADLINE: "2026/12/01"})  # 締切は読むだけ
+
+
+def test_set_next_and_clear(env):
+    cmd(env, "次やること 4 導入を推敲")
+    assert env.ws.values[1][17] == "導入を推敲" and env.ws.values[1][16] == "2026/10/16"
+    assert "今日やる 4" in env.sent[-1] and env.refreshed == 1
+    cmd(env, "次やること 4")
+    assert "導入を推敲" in env.sent[-1]
+    cmd(env, "次やること 4 なし")
+    assert env.ws.values[1][17] == "" and "空にしました" in env.sent[-1]
+
+
+def test_today_and_on_day_make_a_dated_task(env, monkeypatch):
+    cmd(env, "今日やる 4")
+    assert "先に次やることを決めましょう" in env.sent[-1] and env.added == []
+    env.ws.values[1][17] = "導入を推敲"
+    works.clear_cache()
+    cmd(env, "今日やる 4")
+    assert env.added == [("M.M.5s｜導入を推敲", {"scheduled": "2026-10-16", "source": "作品#4"})]
+    updated = []
+    monkeypatch.setattr(sheets, "update_task", lambda tid, **f: updated.append((tid, f)))
+    env.tasks[-1].update(id="lo-x", deleted=False)
+    cmd(env, "やる日 4 月")
+    assert updated == [("lo-x", {"scheduled": "2026-10-19"})] and len(env.added) == 1  # 同じタスクは作らず、日を変える
+    cmd(env, "やる日 4 そのうち")
+    assert "読めませんでした" in env.sent[-1]
+
+
+def test_completing_the_next_step_clears_it(ws):
+    ws.values[1][17] = "導入を推敲"
+    works.clear_cache()
+    touched = works.touch_tasks([{"source": "作品#4", "content": "M.M.5s｜導入を推敲"}])
+    assert [p["title"] for p in touched] == ["M.M.5s"] and ws.values[1][17] == ""
+    ws.values[1][17] = "別のこと"
+    works.clear_cache()
+    works.touch_tasks([{"source": "作品#4", "content": "M.M.5s｜導入を推敲"}])
+    assert ws.values[1][17] == "別のこと"  # 次やることと違うタスクなら消さない
+
+
+def test_completion_reply_hint_once_a_day(monkeypatch):
+    kv = {}
+    monkeypatch.setattr(state, "get_kv", lambda k, d=None: kv.get(k, d))
+    monkeypatch.setattr(state, "set_kv", lambda k, v: kv.__setitem__(k, v))
+    p = {"title": "M.M.5s", "no": 4}
+    assert "次やること 4" in today_task.next_hint([p], DAY)
+    assert today_task.next_hint([p], DAY) is None
+
+
+def test_morning_section_shows_next_and_first_milestone():
+    ps = [{"title": "M.M.5s", "no": 4, "now": True, "kind": "TRPG", "stage": "校正01", "next": "導入を推敲",
+           "deadline": "2026/11/15"}]
+    assert works.morning_section(ps, [], DAY) == "📂 今やるプロジェクト：\n・M.M.5s（校正01） ／ 次: 導入を推敲 ／ 目標 11/1"

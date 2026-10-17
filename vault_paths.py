@@ -15,6 +15,11 @@ def stage_templates() -> str:
     return lifeos(_C["others"], "工程テンプレート.md")
 
 
+def project_board() -> str:
+    """プロジェクトボード（Bot が毎回まるごと書き直す）。"""
+    return lifeos(_C["others"], "プロジェクトボード.md")
+
+
 def health_manual() -> str:
     return lifeos(_C["health"], "Health-Manual.md")
 

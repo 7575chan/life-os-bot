@@ -91,7 +91,7 @@ def check_sheets():
             ws = gc.open_by_key(config.WORKS_SHEET_ID).worksheet(config.WORKS_TAB)
             header = [h.strip() for h in ws.row_values(1)]
             report(True, f"作品管理シートのタブ「{config.WORKS_TAB}」を開く")
-            need = ["タイトル", "今やる？", "工程", "ストップ理由", "最終更新日"]
+            need = ["タイトル", "今やる？", "工程", "ストップ理由", "最終更新日", "次やること", "締切"]
             miss = [h for h in need if h not in header]
             report(not miss, "作品管理シートの見出し", f"(見当たらない列: {miss})" if miss else "")
         except Exception as e:  # noqa: BLE001

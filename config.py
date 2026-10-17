@@ -60,6 +60,8 @@ REPORT_TIME = _parse_time(os.getenv("REPORT_TIME", "20:00"))
 # 1日の区切り（SPEC §7）。この時刻より前は前日の続き（活動日）として扱う
 DAY_START_HOUR = int(os.getenv("DAY_START_HOUR", "5"))
 WRITING_TIME = _parse_time(os.getenv("WRITING_TIME", "10:00"))
+# プロジェクトボード（04-report に毎日1回。SPEC §5 03_CREATIVE「プロジェクトボード」）。朝の案内の少しあと
+BOARD_TIME = _parse_time(os.getenv("BOARD_TIME", "09:05"))
 
 # キー: 内部名, 値: Discordチャンネル名
 CHANNELS = {

@@ -265,19 +265,49 @@ async def handle(message, text: str, items_fn) -> bool:
     return False
 
 
+NEW_PREFIX = "new:"  # 案の中だけの、プロジェクトの「次やること」から作るタスク（OK で作る）
+
+
+def with_projects(tasks: list[dict], projects: list[dict], today: date) -> list[dict]:
+    """週の計画の候補に、今やるプロジェクトの「次やること」（まだタスクになっていないもの）を足す。
+    締切のあるプロジェクトのタスクは、目標日（2週間前）を置き場所の期限にする（シートには書かない）。"""
+    import board
+    out = [dict(t) for t in tasks]
+    open_contents = {t["content"] for t in tasks if _pending(t)}
+    by_src = {}
+    for p in works.now_projects(projects):
+        d = board.parse_deadline(p.get("deadline") or "", today)
+        goal = board.milestones(d)[0][1] if d else None
+        by_src[works.source_of(p)] = (p, goal)
+        content = works.task_content(p, p["next"]) if p.get("next") else ""
+        if content and content not in open_contents:
+            out.append({"id": f"{NEW_PREFIX}{p['no']}", "content": content, "scheduled": "", "due": "",
+                        "priority": "", "source": works.source_of(p), "done": False, "deleted": False, "row": 10**6})
+    for t in out:
+        hit = by_src.get(t.get("source", ""))
+        if hit and hit[1] and _pending(t):
+            due = util.parse_date_any(t.get("due", ""))
+            if due is None or hit[1] < due:
+                t["due"] = hit[1].isoformat()
+    return out
+
+
 async def start_plan(ch, this_week: bool) -> None:
     today = util.activity_day()
     days = plan_days(today, this_week)
     tasks = await asyncio.to_thread(sheets.all_tasks)
-    plan = build(tasks, days, today)
+    projects = []
+    if works.enabled():
+        try:
+            projects = await asyncio.to_thread(works.load)
+        except Exception:  # noqa: BLE001
+            log.warning("作品管理シートを読めませんでした（プロジェクトの次やることは省きます）", exc_info=True)
+    plan = build(with_projects(tasks, projects, today), days, today)
     head = f"🗓 {'今週' if this_week else '来週'}の計画の案です（{label(date.fromisoformat(plan['days'][0]))}〜{label(date.fromisoformat(plan['days'][-1]))}）"
     body = render(plan, head) if plan["items"] else head + "\n入れるタスクが見当たりませんでした。タスクを足してから、もう一度どうぞ。"
     sleepers = []
-    if works.enabled():
-        try:
-            sleepers = sleeping(await asyncio.to_thread(works.load))
-        except Exception:  # noqa: BLE001
-            log.warning("作品管理シートを読めませんでした（寝かせ中の候補は省きます）", exc_info=True)
+    if projects:
+        sleepers = sleeping(projects)
     if sleepers:
         body += "\n\n💤 寝かせ中の作品（入れ替えるなら、プロジェクトの部屋で『今やる 番号』）：\n" + "\n".join(
             f"・{works.label(p)}（{p.get('status')}）" for p in sleepers)
@@ -332,8 +362,14 @@ async def _commit(message, plan: dict) -> None:
     today = util.activity_day()
     tasks = {t["id"]: t for t in await asyncio.to_thread(sheets.all_tasks)}
     placed = {i: iso for iso, v in plan["grid"].items() for i in v}
-    ups = []
+    ups, created = [], False
     for i, it in enumerate(plan["items"]):
+        if it["id"].startswith(NEW_PREFIX):  # プロジェクトの次やること → 置いた日のタスクとして作る
+            if i in placed:
+                await asyncio.to_thread(sheets.add_task, it["content"], scheduled=placed[i],
+                                        source=works.SOURCE_PREFIX + it["id"][len(NEW_PREFIX):])
+                created = True
+            continue
         t = tasks.get(it["id"])
         if t is None or not _pending(t):
             continue
@@ -346,6 +382,7 @@ async def _commit(message, plan: dict) -> None:
                 ups.append((t["row"], {"実行予定日": ""}))
     if ups:
         await asyncio.to_thread(sheets.update_rows, sheets.TASKS, ups)
+    if ups or created:
         await asyncio.to_thread(task_sync.run_safely)
     monday = week_start(date.fromisoformat(plan["days"][0]))
     state.set_kv(PLANNED_KEY.format(monday.isoformat()), "1")
