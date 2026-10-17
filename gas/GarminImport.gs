@@ -1,27 +1,39 @@
 /**
- * Garmin のレポートメール → スプレッドシート（人生管理OS の体調分析用）
+ * Garmin と Habitify のレポートメール → スプレッドシート（人生管理OS の体調・習慣の分析用）
  * - 自分の Google アカウントで動く。Gmail は読むだけ（ラベル付け・削除・送信はしない）
- * - 書くのは、このスクリプトが入っているスプレッドシートの「Garmin」タブだけ
+ * - 書くのは、このスクリプトが入っているスプレッドシートの「Garmin」「Habitify」タブだけ
  * - 同じメールは2回取り込まない（メールの ID で判定）
+ * - Habitify で習慣を増やしても、メールに載っていれば自動で取り込まれる（習慣の名前はメールのまま）
  */
-var TAB = 'Garmin';
 var HEADER = ['日付', '期間', '項目', '値', '受信日時', 'メールID'];
-var QUERY = 'from:garmin.com (ウェルネスレポート OR フィットネスレポート)';
+var SOURCES = [
+  {tab: 'Garmin', query: 'from:garmin.com (ウェルネスレポート OR フィットネスレポート)',
+   parse: function (text, at) { return parseWellness_(text, at).concat(parseFitness_(text, at)); }},
+  {tab: 'Habitify', query: 'from:habitify 週次レポート', parse: function (text, at) { return parseHabitify_(text, at); }}
+];
 var MAX_THREADS = 100;  // 1回に見るメールのまとまりの数（最初の取り込みで多すぎると時間切れになるため）
 
 /** 毎朝の取り込み（トリガーから呼ばれる。手で実行してもよい） */
 function importGarmin() {
-  var sheet = sheet_();
+  SOURCES.forEach(function (src) {
+    try {
+      importSource_(src);
+    } catch (e) {  // 片方が失敗しても、もう片方は取り込む
+      console.error(src.tab + ' の取り込みに失敗しました: ' + e);
+    }
+  });
+}
+
+function importSource_(src) {
+  var sheet = sheet_(src.tab);
   var done = doneIds_(sheet);
   var out = [];
-  var threads = GmailApp.search(QUERY, 0, MAX_THREADS);
-  threads.forEach(function (th) {
+  GmailApp.search(src.query, 0, MAX_THREADS).forEach(function (th) {
     th.getMessages().forEach(function (msg) {
       var id = msg.getId();
       if (done[id]) return;
-      var text = msg.getPlainBody();
       var at = msg.getDate();
-      var rows = parseWellness_(text, at).concat(parseFitness_(text, at));
+      var rows = src.parse(msg.getPlainBody(), at);
       if (rows.length === 0) {
         console.warn('読み取れなかったメール: ' + msg.getSubject() + '（' + at + '）');
         return;  // 読めなかったメールは記録しない（形式が変わったときに、あとで直して取り込み直せるように）
@@ -30,7 +42,7 @@ function importGarmin() {
     });
   });
   if (out.length) sheet.getRange(sheet.getLastRow() + 1, 1, out.length, HEADER.length).setValues(out);
-  console.log('取り込んだ行: ' + out.length);
+  console.log(src.tab + ' に取り込んだ行: ' + out.length);
 }
 
 /** 最初に1回だけ手で実行: 毎朝 7時台に importGarmin が動くようにする */
@@ -41,9 +53,9 @@ function setupTrigger() {
   ScriptApp.newTrigger('importGarmin').timeBased().everyDays(1).atHour(7).inTimezone('Asia/Tokyo').create();
 }
 
-function sheet_() {
+function sheet_(tab) {
   var book = SpreadsheetApp.getActiveSpreadsheet();
-  var sh = book.getSheetByName(TAB) || book.insertSheet(TAB);
+  var sh = book.getSheetByName(tab) || book.insertSheet(tab);
   if (sh.getLastRow() === 0) sh.appendRow(HEADER);
   return sh;
 }
@@ -119,5 +131,22 @@ function parseFitness_(text, mailDate) {
   ].forEach(function (p) { var v = dur_(stats, p[1]); if (v !== null) rows.push([start, '週', p[0], v]); });
   if ((m = stats.match(/安静時心拍\s*(\d+)\s*bpm/))) rows.push([start, '週', '安静時心拍', num_(m[1])]);
   if ((m = stats.match(/(?:^|\n|%)\s*ストレス\s*(\d+)/))) rows.push([start, '週', 'ストレス', num_(m[1])]);
+  return rows;
+}
+
+/** Habitify の週次レポート → 行の配列。全体の達成率・習慣ごとの完了率・できた日数・合計（分か回）*/
+function parseHabitify_(text, mailDate) {
+  var w = text.match(/(\d{1,2})月\s*(\d{1,2})\s*-\s*(\d{1,2})月\s*(\d{1,2})\s*\n\s*週次レポート/);
+  if (!w) return [];
+  var start = ymd_(dateNear_(Number(w[1]), Number(w[2]), mailDate));
+  var rows = [], m;
+  if ((m = text.match(/全体の達成率は\s*([\d.]+)\s*%/))) rows.push([start, '週', '全体の達成率(%)', Number(m[1])]);
+  var re = /(\d+(?:\.\d+)?)%\s*\n\s*([^\n]+?)\s*\n\s*(\d+)\/(\d+)\s*日\s*\(\s*(\d+)\s*(分|回)\s*\)/g;
+  while ((m = re.exec(text))) {
+    var name = m[2];
+    rows.push([start, '週', name + '・完了率(%)', Number(m[1])]);
+    rows.push([start, '週', name + '・日数', Number(m[3])]);
+    rows.push([start, '週', name + '・' + m[6], Number(m[5])]);
+  }
   return rows;
 }

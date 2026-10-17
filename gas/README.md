@@ -69,9 +69,9 @@ Bot（サービスアカウント）は Google ドライブに「新しいファ
 
 ---
 
-# Garmin のメールの取り込み（`GarminImport.gs`）
+# Garmin と Habitify のメールの取り込み（`GarminImport.gs`）
 
-上の中継とは**別のスクリプト**です。Garmin Connect から届く週ごとのレポートメールの数字を、別のスプレッドシート「Garmin記録」の `Garmin` タブに書きます（SPEC §5 `02-health`「Garmin のメールの記録と分析」）。
+上の中継とは**別のスクリプト**です。Garmin Connect と Habitify から届く週ごとのレポートメールの数字を、別のスプレッドシート「Garmin記録」の `Garmin` タブと `Habitify` タブに書きます（タブは最初の実行で自動で作られます。SPEC §5 `02-health`「Garmin と Habitify のメールの記録と分析」）。Habitify で習慣を増やしても、メールに載っていれば自動で取り込まれます。
 
 - Gmail は**読むだけ**（`gmail.readonly`）。ラベル付け・削除・送信はしません
 - 書くのは、スクリプトが入っている「Garmin記録」のブックだけ（`spreadsheets.currentonly`）
