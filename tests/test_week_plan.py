@@ -208,3 +208,87 @@ def test_morning_mentions_carry_over_and_monday_plan_hint():
     assert "移す 番号 明日" in text and "3日" not in text
     assert "移す" not in today_task.compose_morning([t(2, scheduled="2026-10-17")], None, day=SAT)
     assert "今週の計画" in today_task.compose_morning([], None, day=date(2026, 10, 19), plan_hint=True)
+
+
+# ---------------------------------------------------------------- 圧倒されない一覧（§10 の 44）
+
+
+def test_to_decide_splits_and_hides_future():
+    every = [t(1, scheduled="2026-10-17"), t(2, scheduled="2026-10-25"), t(3, due="2026-10-10"),
+             t(4, due="2026-10-01"), t(5), t(6, due="2026-10-30"), t(7, scheduled="2026-10-25", due="2026-10-01"),
+             t(8, done=True)]
+    redo, undated = today_task.to_decide(every, {"lo-1"}, SAT)
+    assert [x["id"] for x in redo] == ["lo-4", "lo-3"]  # 期限の古い順
+    assert [x["id"] for x in undated] == ["lo-6", "lo-5"]
+    assert [x["id"] for x in today_task.future_tasks(every, SAT)] == ["lo-7", "lo-2"]  # 同じ日なら期限の近い順
+
+
+def test_all_list_five_per_section_numbers_continue_and_more(env):
+    env.tasks = [t(1, scheduled="2026-10-17")] + [t(10 + i, due="2026-10-0" + str(i + 1)) for i in range(7)] \
+        + [t(30 + i) for i in range(3)] + [t(50, scheduled="2026-11-01")]
+    run(today_task.handle(env.message("今あるタスクは？")))
+    text = env.sent[-1]
+    assert "🔁 日を決め直すタスク：\n2. タスク10（期限 10/1(木)）" in text and "6. タスク14" in text
+    assert "タスク15" not in text and "7. タスク30" in text and "タスク50" not in text
+    assert "続きは『続き』" in text and "件" not in text
+    assert [i["id"] for i in env.pending["today_list"]["payload"]["items"]][:2] == ["lo-1", "lo-10"]
+    run(today_task.handle(env.message("続き")))
+    assert "2. タスク15" in env.sent[-1] and "3. タスク16" in env.sent[-1] and "タスク30" not in env.sent[-1]
+    assert "続き" not in env.sent[-1]
+    run(today_task.handle(env.message("移す 2 月")))
+    assert env.updates[-1] == ("lo-15", {"scheduled": "2026-10-19"})
+    run(today_task.handle(env.message("続き")))  # 移したあとの一覧は今日の一覧なので、最初から出し直す
+    assert "🔁 日を決め直すタスク：\n2. タスク10" in env.sent[-1]
+    run(today_task.handle(env.message("続き")))
+    run(today_task.handle(env.message("続き")))
+    assert env.sent[-1] == "ここまでです。"
+
+
+def test_future_list_only_on_request(env):
+    env.tasks = [t(1, scheduled="2026-10-17"), t(2, scheduled="2026-10-20")]
+    run(today_task.handle(env.message("今後の予定は？")))
+    assert "📅 今後の予定：\n2. 10/20(火) タスク2" in env.sent[-1]
+
+
+def test_sort_one_by_one(env):
+    env.tasks = [t(1, due="2026-10-01"), t(2)]
+
+    def upd(tid, **f):
+        env.updates.append((tid, f))
+        for x in env.tasks:
+            if x["id"] == tid:
+                x.update(f)
+        return True
+
+    env_monkey = pytest.MonkeyPatch()
+    env_monkey.setattr(sheets, "update_task", upd)
+    try:
+        run(today_task.handle(env.message("整理")))
+        assert "🔁 「タスク1（期限 10/1(木)）」はいつにしますか？" in env.sent[-1] and "Obsidian で消して" in env.sent[-1]
+        run(today_task.handle(env.message("4")))
+        assert env.updates == [("lo-1", {"scheduled": "2026-10-19"})]
+        assert "🗂 「タスク2」" in env.sent[-1] and "Obsidian" not in env.sent[-1]
+        run(today_task.handle(env.message("5")))  # このまま
+        assert len(env.updates) == 1 and "ぜんぶ決まりました" in env.sent[-1]
+        env.tasks.append(t(3))
+        run(today_task.handle(env.message("整理")))
+        run(today_task.handle(env.message("水")))
+        assert env.updates[-1] == ("lo-2", {"scheduled": "2026-10-21"})  # 「このまま」にした分も、新しい整理ではまた出る
+        run(today_task.handle(env.message("おわり")))
+        assert "決めた分は" in env.sent[-1]
+    finally:
+        env_monkey.undo()
+
+
+def test_sort_pending_does_not_eat_new_tasks(env, monkeypatch):
+    env.tasks = [t(1)]
+    added = []
+    monkeypatch.setattr(sheets, "add_task", lambda content, **kw: added.append(content) or "lo-n")
+    run(today_task.handle(env.message("整理")))
+    run(today_task.handle(env.message("明日やる 牛乳を買う")))
+    assert added == ["牛乳を買う"] and env.updates == []
+
+
+def test_morning_sort_hint():
+    assert today_task.SORT_HINT in today_task.compose_morning([], None, day=SAT, sort_hint=True)
+    assert "整理" not in today_task.compose_morning([], None, day=SAT)

@@ -25,6 +25,7 @@ log = logging.getLogger("life-os.week_plan")
 
 KIND_PLAN = "week_plan"
 KIND_REST = "rest_choice"
+KIND_SORT = "sort_one"
 PER_DAY = 3
 EXTRA_SHOW = 10
 WD = task_dates.WEEKDAYS
@@ -35,6 +36,9 @@ _REST = re.compile(r"^\s*今日は(?:休む|休みます|お休み)\s*[!！。]*
 _MOVE = re.compile(r"^\s*移す\s+([\d\s,、，と]+?)\s+(\S+)\s*$")
 _START = re.compile(r"^\s*着手\s*([\d\s,、，と]+)\s*$")
 _FIRST = re.compile(r"^\s*(?:どうしよう|手が止まった|やる気が出ない|最初の5分)\s*(\d+)?\s*[…。!！?？]*\s*$")
+_SORT = re.compile(r"^\s*(?:タスク)?整理(?:する|したい|して)?\s*[!！。?？]*\s*$")
+_SORT_END = re.compile(r"^\s*(?:おわり|終わり|おしまい|やめる|やめ|終了|ストップ)\s*[!！。]*\s*$")
+_SORT_WORD = re.compile(r"^(?:今日|きょう|明日|あした|明後日|あさって|来週|棚|[月火水木金土日](?:曜日?)?|\d{1,2}/\d{1,2})[にへ]?$")
 _OK = re.compile(r"^\s*(?:ok|OK|ｏｋ|オーケー|決定|確定|これで)\s*[!！。]*\s*$", re.I)
 _CANCEL = re.compile(r"^\s*(?:やめる|やめ|キャンセル|中止)\s*[。]*\s*$")
 _EDIT = re.compile(r"^(?:\+\s*(\d+)|(\d+)\s*(外す|はずす|消す|[月火水木金土日])曜?日?)$")
@@ -233,6 +237,11 @@ async def handle(message, text: str, items_fn) -> bool:
     if await _plan_reply(message, text):
         return True
     if await _rest_reply(message, text):
+        return True
+    if await _sort_reply(message, text):
+        return True
+    if _SORT.match(text):
+        await _sort_next(ch, set(), first=True)
         return True
     m = _PLAN.match(text)
     if m:
@@ -436,3 +445,60 @@ async def _first_step(ch, num: int | None, items_fn) -> None:
     data = await claude_client.complete_json(_FIRST_PROMPT.format(task=it["content"]), {"step": ""})
     step = str((data or {}).get("step") or "").strip() if isinstance(data, dict) else ""
     await ch.send(f"まずは5分だけ: {step or 'このタスクのファイル（または道具）を開くところまで'}\n（{it['content']}）")
+
+
+# ---------------------------------------------------------------- 整理（1つずつ日を決める）
+
+
+def sort_choices(today: date) -> list[tuple[str, date | None]]:
+    fri = parse_target("金", today) if today.weekday() != 4 else today
+    return [("今日", today), ("明日", today + timedelta(days=1)), (f"金（{task_dates.fmt_md(fri)}）", fri),
+            (f"来週（{task_dates.fmt_md(week_start(today) + timedelta(days=7))}）", week_start(today) + timedelta(days=7)),
+            ("このまま（あとで）", None)]
+
+
+async def _sort_next(ch, skip: set[str], first: bool = False) -> None:
+    from handlers import today_task
+    day = util.activity_day()
+    today = await asyncio.to_thread(sheets.today_tasks, day)
+    redo, undated = today_task.to_decide(await asyncio.to_thread(sheets.all_tasks), {t["id"] for t in today}, day)
+    nxt = next((t for t in redo + undated if t["id"] not in skip), None)
+    if nxt is None:
+        await ch.send("ぜんぶ決まりました🌿" if not first else "日を決めたいタスクは、今のところありません🌿")
+        return
+    head = "🔁" if nxt in redo else "🗂"
+    opts = "\n".join(f"{i}. {lbl}" for i, (lbl, _) in enumerate(sort_choices(day), 1))
+    note = "\n（『おわり』でいつでも終われます。やらなくなったタスクは Obsidian で消してください）" if first else ""
+    msg = await ch.send(f"{head} 「{today_task._with_due(nxt)}」はいつにしますか？\n{opts}\n"
+                        f"番号か「水」「10/25」のように返信してください。{note}")
+    state.put_pending(msg.id, ch.id, KIND_SORT, {"id": nxt["id"], "content": nxt["content"], "skip": sorted(skip)})
+
+
+async def _sort_reply(message, text: str) -> bool:
+    pending = _find_pending(message, KIND_SORT, 12)
+    if pending is None:
+        return False
+    t = unicodedata.normalize("NFKC", text).strip()
+    payload = pending["payload"]
+    ch = message.channel
+    if _SORT_END.match(t):
+        state.delete_pending(pending["message_id"])
+        await ch.send("ここまでにしておきます。決めた分は、そのまま入っています。")
+        return True
+    today = util.activity_day()
+    choices = sort_choices(today)
+    if t.isdigit() and 1 <= int(t) <= len(choices):
+        target = choices[int(t) - 1][1]
+        keep = target is None
+    elif _SORT_WORD.match(t) and (target := parse_target(t, today)) is not None:
+        keep = target == ""  # 「棚」= 日付なしのまま
+    else:
+        return False  # 整理の答えでなければ、ふつうのメッセージとして扱う
+    state.delete_pending(pending["message_id"])
+    skip = set(payload.get("skip", [])) | {payload["id"]}
+    if not keep:
+        await asyncio.to_thread(sheets.update_task, payload["id"], scheduled=target.isoformat())
+        await asyncio.to_thread(task_sync.run_safely)
+        await ch.send(f"📆 {task_dates.fmt_md(target)}にしました。")
+    await _sort_next(ch, skip)
+    return True
