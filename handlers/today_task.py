@@ -25,6 +25,8 @@ _ASK_TAIL = r"\s*(?:は|って|を)?\s*(?:何|なに|なん|ある|どれ|どん
 _SHOW = re.compile(r"^\s*(?:今日の(?:タスク|予定|やること)|今日やること|タスク|一覧|リスト)" + _ASK_TAIL)
 _SHOW_ALL = re.compile(r"^\s*(?:(?:今ある|いまある|全部の|ぜんぶの|全ての|すべての|残りの|残ってる|のこりの|未完了の)(?:タスク|やること)"
                        r"|タスク(?:全部|ぜんぶ|すべて|全て)|やることリスト|全タスク)" + _ASK_TAIL)
+_MORE = re.compile(r"^\s*(?:続き|つづき|もっと)(?:を)?(?:見せて|みせて|表示)?\s*[!！。?？]*\s*$")
+_FUTURE = re.compile(r"^\s*(?:今後|これから|先|未来)の(?:予定|タスク)" + _ASK_TAIL)
 _KIND = re.compile(r"^\s*(メイン|サブ)(?:\s*[:：]\s*|\s+)(.+)$", re.S)
 # 登録時の区分: 行末の「（サブ）」「【メイン】」「#サブ」、または「サブ：」だけの行（以降の行に効く）
 _KIND_SUFFIX = re.compile(r"^(.*?)\s*(?:[(（【\[]\s*(メイン|サブ)(?:タスク)?\s*[)）】\]]|[#＃](メイン|サブ))\s*$", re.S)
@@ -88,7 +90,8 @@ def format_task_list(tasks: list[dict]) -> str:
 
 
 def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[str] | None = None,
-                    projects: str | None = None, day: date | None = None, plan_hint: bool = False) -> str:
+                    projects: str | None = None, day: date | None = None, plan_hint: bool = False,
+                    sort_hint: bool = False) -> str:
     """朝の案内の本文。昨日の執筆実績は、当日の記録（09:44）が入ったあとの別の投稿（scheduler.post_writing）で出す。
 
     overnight: 前日の夜の問いかけのあと（〜今朝）に完了したタスク。夜の問いかけに載らなかった分をここで出す。
@@ -110,6 +113,8 @@ def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[
         parts.append(f"（{note}）")
     else:
         parts.append("今日のタスクはまだありません。ここに書き込むと、今日のタスクに追加されます。夜の振り返りで、明日やるものを選ぶこともできます🌙")
+    if sort_hint:  # 日を決めたいタスクがあるときだけ。一覧も件数も出さない
+        parts.append(SORT_HINT)
     if plan_hint:
         parts.append(PLAN_HINT)
     return "\n\n".join(parts)
@@ -133,8 +138,13 @@ async def build_morning(day: date) -> tuple[str, list[dict]]:
     diary = await asyncio.to_thread(sheets.diary_on, y)
     line = health_line(score, (diary or {}).get("ご機嫌度") or None)
     plan_hint = day.weekday() == 0 and not week_plan.planned(day)
+    try:
+        redo, undated = to_decide(await asyncio.to_thread(sheets.all_tasks), {t["id"] for t in tasks}, day)
+    except Exception:  # noqa: BLE001
+        log.warning("日を決めたいタスクを確かめられませんでした（朝の案内では省きます）", exc_info=True)
+        redo, undated = [], []
     return compose_morning(tasks, line, await done_list.overnight_done(day), await projects_section(day),
-                           day, plan_hint), tasks
+                           day, plan_hint, bool(redo or undated)), tasks
 
 
 async def projects_section(day: date) -> str | None:
@@ -158,39 +168,110 @@ async def post_list(channel, header: str | None = None) -> None:
     state.put_pending(msg.id, channel.id, "today_list", {"items": [{"id": t["id"], "content": t["content"]} for t in tasks]})
 
 
-BACKLOG_SHOW = 30
+SECTION_MAX = 5
+REDO_TITLE = "🔁 日を決め直すタスク："
+UNDATED_TITLE = "🗂 日がまだ決まっていないタスク："
+MORE_NOTE = "（続きは『続き』）"
+SORT_HINT = "日を決めたいタスクがあれば『整理』でどうぞ（しなくても大丈夫です）"
 
 
-def format_all(today: list[dict], all_tasks: list[dict], day: date) -> str:
-    """「今あるタスクは？」: 今日（番号つき。「完了 N」の番号と同じ）・予定あり（日付順）・バックログ（優先度順）。"""
-    ids = {t["id"] for t in today}
-    rest = [t for t in all_tasks if not t["done"] and not t["deleted"] and t["id"] not in ids]
-    future = sorted([t for t in rest if util.parse_date_any(t["scheduled"]) and util.parse_date_any(t["scheduled"]) > day],
-                    key=lambda t: (t["scheduled"], sheets.task_sort_key(t)))
-    backlog = sorted([t for t in rest if not t["scheduled"]], key=sheets.task_sort_key)
+def to_decide(all_tasks: list[dict], today_ids: set[str], day: date) -> tuple[list[dict], list[dict]]:
+    """実行日の無い未完了タスクを「日を決め直す」（期限が過ぎた）と「日がまだ決まっていない」に分ける。
+    実行日が今日以前のもの（今日の一覧に出る）と未来のもの（出さない）は入れない。"""
+    redo, undated = [], []
+    for t in all_tasks:
+        if t["done"] or t["deleted"] or t["id"] in today_ids or util.parse_date_any(t["scheduled"]):
+            continue
+        due = util.parse_date_any(t["due"])
+        (redo if due and due < day else undated).append(t)
+    redo.sort(key=lambda t: (util.parse_date_any(t["due"]), sheets.task_sort_key(t)))
+    undated.sort(key=sheets.task_sort_key)
+    return redo, undated
+
+
+def future_tasks(all_tasks: list[dict], day: date) -> list[dict]:
+    out = [t for t in all_tasks if not t["done"] and not t["deleted"]
+           and (d := util.parse_date_any(t["scheduled"])) and d > day]
+    return sorted(out, key=lambda t: (util.parse_date_any(t["scheduled"]), sheets.task_sort_key(t)))
+
+
+def _with_due(t: dict) -> str:
+    d = util.parse_date_any(t["due"])
+    return t["content"] + (f"（期限 {task_dates.fmt_md(d)}）" if d else "")
+
+
+def format_sections(redo: list[dict], undated: list[dict], start: int, offset: int = 0) -> tuple[list[str], list[dict], bool]:
+    """②③を offset から5つずつ。番号は start から。(本文の欄, 番号順のタスク, まだ残りがあるか)"""
+    parts, shown, n = [], [], start
+    for title, tasks in ((REDO_TITLE, redo), (UNDATED_TITLE, undated)):
+        page = tasks[offset:offset + SECTION_MAX]
+        if page:
+            parts.append(title + "\n" + "\n".join(f"{i}. {_with_due(t)}" for i, t in enumerate(page, n)))
+            n += len(page)
+            shown += page
+    more = len(redo) > offset + SECTION_MAX or len(undated) > offset + SECTION_MAX
+    return parts, shown, more
+
+
+def format_all(today: list[dict], all_tasks: list[dict], day: date) -> tuple[str, list[dict]]:
+    """「今あるタスクは？」: 今日（番号つき）・日を決め直す・日がまだ決まっていない（5つずつ）。未来のタスクと件数は出さない。"""
+    redo, undated = to_decide(all_tasks, {t["id"] for t in today}, day)
     parts = [format_task_list(today) if today else "今日のタスクは、今のところありません。"]
-    if future:
-        parts.append("📅 予定が入っているタスク：\n" + "\n".join(
-            f"・{task_dates.fmt_md(util.parse_date_any(t['scheduled']))} {t['content']}" for t in future))
-    if backlog:
-        shown = backlog[:BACKLOG_SHOW]
-        more = f"\n（ほか {len(backlog) - len(shown)}件）" if len(backlog) > len(shown) else ""
-        parts.append("🗂 日付の無いタスク（バックログ）：\n" + "\n".join(
-            f"・{t['content']}" + (f"（期限 {task_dates.fmt_md(util.parse_date_any(t['due']))}）" if util.parse_date_any(t["due"]) else "")
-            for t in shown) + more)
-    return "\n\n".join(parts)
+    sections, shown, more = format_sections(redo, undated, len(today) + 1)
+    parts += sections
+    if more:
+        parts.append(MORE_NOTE)
+    return "\n\n".join(parts), shown
+
+
+def _save_list(msg, channel, tasks: list[dict], **extra) -> None:
+    state.put_pending(msg.id, channel.id, "today_list",
+                      {"items": [{"id": t["id"], "content": t["content"]} for t in tasks], **extra})
 
 
 async def post_all(channel) -> None:
-    """今あるタスクを全部（完了・削除を除く）投稿する。番号は今日の一覧と同じ。"""
+    """今あるタスク（完了・削除・未来を除く）を投稿する。番号は今日の一覧から続けて振る。"""
     day = util.activity_day()
     today = ordered(await asyncio.to_thread(sheets.today_tasks, day))
     every = await asyncio.to_thread(sheets.all_tasks)
-    body = format_all(today, every, day)
-    if today:
-        body += f"\n\n（{HINT}）"
+    body, shown = format_all(today, every, day)
+    if today or shown:
+        body += f"\n\n（{HINT}。日を決めるなら『移す 番号 金』や『整理』）"
     msg = await util.send_long(channel, body)
-    state.put_pending(msg.id, channel.id, "today_list", {"items": [{"id": t["id"], "content": t["content"]} for t in today]})
+    _save_list(msg, channel, today + shown, offset=0)
+
+
+async def post_more(channel) -> None:
+    """「続き」: 直前の「今あるタスク」の②③の、次の5つずつ。"""
+    pending = state.latest_pending(channel.id, "today_list", max_age_hours=36)
+    offset = (pending["payload"].get("offset") if pending else None)
+    if offset is None:
+        await post_all(channel)
+        return
+    offset += SECTION_MAX
+    day = util.activity_day()
+    today = ordered(await asyncio.to_thread(sheets.today_tasks, day))
+    redo, undated = to_decide(await asyncio.to_thread(sheets.all_tasks), {t["id"] for t in today}, day)
+    sections, shown, more = format_sections(redo, undated, len(today) + 1, offset)
+    if not shown:
+        await channel.send("ここまでです。")
+        return
+    msg = await util.send_long(channel, "\n\n".join(sections + ([MORE_NOTE] if more else [])))
+    _save_list(msg, channel, today + shown, offset=offset)
+
+
+async def post_future(channel) -> None:
+    """「今後の予定」: 実行日が未来のタスク（見たいときだけ）。"""
+    day = util.activity_day()
+    today = ordered(await asyncio.to_thread(sheets.today_tasks, day))
+    future = future_tasks(await asyncio.to_thread(sheets.all_tasks), day)
+    if not future:
+        await channel.send("先の日付が入っているタスクは、今のところありません。")
+        return
+    lines = [f"{i}. {task_dates.fmt_md(util.parse_date_any(t['scheduled']))} {t['content']}"
+             for i, t in enumerate(future, len(today) + 1)]
+    msg = await util.send_long(channel, "📅 今後の予定：\n" + "\n".join(lines) + "\n\n（動かすなら『移す 番号 先』）")
+    _save_list(msg, channel, today + future)
 
 
 async def _items(channel) -> list[dict]:
@@ -351,6 +432,12 @@ async def handle(message) -> None:
         return
     if _SHOW_ALL.match(text):
         await post_all(channel)
+        return
+    if _MORE.match(text):
+        await post_more(channel)
+        return
+    if _FUTURE.match(text):
+        await post_future(channel)
         return
     if _SHOW.match(text):
         await post_list(channel)

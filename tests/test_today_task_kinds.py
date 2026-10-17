@@ -335,7 +335,7 @@ def test_all_tasks_question(env, monkeypatch):
     text = env.sent[-1]
     assert env.added == []
     assert "1. タスク1" in text
-    assert "📅 予定が入っているタスク：\n・9/23(水) タスク2" in text
-    assert "🗂 日付の無いタスク（バックログ）：\n・タスク3（期限 9/30(水)）\n・タスク4" in text
-    assert "タスク5" not in text and "タスク6" not in text
-    assert [i["id"] for i in env.pending["items"]] == ["lo-1"]  # 「完了 1」の番号は今日の一覧のまま
+    assert "タスク2" not in text  # 実行日が未来のタスクは出さない
+    assert "🗂 日がまだ決まっていないタスク：\n2. タスク3（期限 9/30(水)）\n3. タスク4" in text
+    assert "タスク5" not in text and "タスク6" not in text and "件" not in text
+    assert [i["id"] for i in env.pending["items"]] == ["lo-1", "lo-3", "lo-4"]  # 番号は今日の一覧から続く
