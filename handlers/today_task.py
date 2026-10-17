@@ -12,6 +12,7 @@ import task_dates
 import task_sync
 import util
 import works
+import board
 from handlers import week_plan
 
 log = logging.getLogger("life-os.today_task")
@@ -173,6 +174,16 @@ REDO_TITLE = "🔁 日を決め直すタスク："
 UNDATED_TITLE = "🗂 日がまだ決まっていないタスク："
 MORE_NOTE = "（続きは『続き』）"
 SORT_HINT = "日を決めたいタスクがあれば『整理』でどうぞ（しなくても大丈夫です）"
+
+
+def next_hint(touched: list[dict], day: date) -> str | None:
+    """プロジェクトのタスクを完了したときの一言（その日1回まで。急かさない）。"""
+    key = f"board_hint:{day.isoformat()}"
+    if state.get_kv(key):
+        return None
+    p = touched[0]
+    state.set_kv(key, "1")
+    return f"📂 『{p['title']}』の次やることは、12 の部屋で『次やること {p['no']} 内容』か『タスク案 {p['no']}』で決められます"
 
 
 def to_decide(all_tasks: list[dict], today_ids: set[str], day: date) -> tuple[list[dict], list[dict]]:
@@ -455,10 +466,16 @@ async def handle(message) -> None:
             await channel.send("その番号のタスクは見当たりませんでした。もう一度どうぞ。")
             return
         await asyncio.to_thread(task_sync.run_safely)
+        touched = []
         if works.enabled():  # プロジェクトのタスクなら、作品管理シートの最終更新日を書く（失敗しても止めない）
-            await asyncio.to_thread(lambda: works.touch_tasks(sheets.find_tasks(ids)))
+            touched = await asyncio.to_thread(lambda: works.touch_tasks(sheets.find_tasks(ids)))
         await util.ack(message, "✅")
         header = "✅ 完了にしました！\n" + "\n".join(f"・{c}" for c in done) + "\nおつかれさまです。"
+        if touched:
+            hint = next_hint(touched, util.activity_day())
+            if hint:
+                header += "\n" + hint
+            await board.refresh()
         so_far = done_list.format_items(done_list.SO_FAR_TITLE,  # 今日完了したものを毎回全部見せる（件数は出さない）
                                         [t["content"] for t in await done_list.completed_on(util.activity_day())])
         await post_list(channel, header + (f"\n\n{so_far}" if so_far else ""))

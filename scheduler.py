@@ -1,4 +1,4 @@
-"""定時ジョブ（JST）: 朝の案内、昨日の執筆実績、夜の振り返りの問いかけ、週次・月次レポート、タスク棚の同期（SPEC §5・§6・§7）。
+"""定時ジョブ（JST）: 朝の案内、昨日の執筆実績、夜の振り返りの問いかけ、週次・月次レポート、プロジェクトボード、タスク棚の同期（SPEC §5・§6・§7）。
 
 - 朝・夜・レポートは、同じ日に二重投稿しないよう state に実行済みを記録する。
 - 起動が定時に間に合わなかった場合の「後追い投稿」はしない（思いがけない時間に投稿しないため）。
@@ -10,6 +10,7 @@ import discord
 from discord.ext import tasks
 
 import asyncio
+import board
 import config
 import done_list
 import report
@@ -175,6 +176,35 @@ async def report_job():
             log.exception("report job (%s) failed", kind)
 
 
+async def post_board(force: bool = False) -> bool:
+    """プロジェクトボード（毎日 BOARD_TIME に 04-report へ1回。SPEC §5 03_CREATIVE「プロジェクトボード」）。"""
+    ch = find_channel("report")
+    if ch is None:
+        return False
+    day = util.today()
+    if not force and await _posted_today(ch, board.PREFIX, day):
+        state.mark_done(f"board:{day}")
+        log.info("プロジェクトボードは、別の場所ですでに投稿されているため、投稿しません")
+        return False
+    return await board.post_daily(ch, force)
+
+
+@tasks.loop(time=config.BOARD_TIME)
+async def board_job():
+    try:
+        await post_board()
+    except Exception:  # noqa: BLE001
+        log.exception("board job failed")
+
+
+@tasks.loop(hours=1)
+async def board_refresh_job():
+    try:  # シートを手で直した分・Obsidian で完了にした分も反映する（変わっていなければ何もしない）
+        await board.refresh()
+    except Exception:  # noqa: BLE001
+        log.exception("board refresh failed")
+
+
 @tasks.loop(minutes=10)
 async def sync_job():
     await asyncio.to_thread(task_sync.run_safely)
@@ -183,6 +213,7 @@ async def sync_job():
 def start(client: discord.Client) -> None:
     global _client
     _client = client
-    for job in (morning_job, evening_job, report_job, writing_job, sync_job):
+    board.set_channel_finder(find_channel)
+    for job in (morning_job, evening_job, report_job, writing_job, sync_job, board_job, board_refresh_job):
         job.before_loop(client.wait_until_ready)
         job.start()

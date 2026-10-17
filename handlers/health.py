@@ -3,6 +3,7 @@ import asyncio
 import logging
 from datetime import timedelta
 
+import body_data
 import claude_client
 import health_analysis
 import notes
@@ -110,8 +111,30 @@ _MANUAL_PROMPT = """次のデータから、ユーザーの「自分取扱マニ
 睡眠と気分の集計（しきい値 {th} 時間）:
 {table}
 
+Garmin と Habitify の集計（週・日の平均。コードで計算済み）:
+{body}
+
 最近の体調の記録:
 {rows}"""
+
+
+BODY_TITLE = "## Garmin と Habitify のデータから（数字だけ）"
+
+
+async def _body_numbers(today) -> tuple[list[str], str]:
+    """Garmin と Habitify の分析の行と、マニュアルの末尾に書く節（AI には書かせない）。未設定なら ([], "")。"""
+    if not body_data.enabled():
+        return [], ""
+    try:
+        garmin, habitify = await asyncio.to_thread(body_data.load)
+        diary = await asyncio.to_thread(sheets.between, sheets.DIARY, today - timedelta(weeks=body_data.WEEK_TREND + 1),
+                                        today + timedelta(days=1))
+    except Exception:  # noqa: BLE001
+        log.warning("Garmin と Habitify の記録を読めませんでした（取扱マニュアルでは省きます）", exc_info=True)
+        return [], f"\n{BODY_TITLE}\n\n今回は記録を読めませんでした。\n"
+    lines = body_data.analyze(garmin, habitify, [r for _, r in diary], today + timedelta(days=1))
+    text = "\n".join(f"- {x}" for x in lines) if lines else "まだデータが少ないため、数字はありません。"
+    return lines, f"\n{BODY_TITLE}\n\n{text}\n"
 
 
 async def update_manual(today) -> str:
@@ -125,11 +148,13 @@ async def update_manual(today) -> str:
     table = health_analysis.sleep_mood_table([r for _, r in health], [r for _, r in diary])
     rows = "\n".join(f"{r['日時']} 睡眠{r['睡眠時間']}h {r['客観指標']} メモ:{r['主観メモ']} → {r['AI判定']}"
                      for _, r in health[-40:]) or "（記録がまだありません）"
-    body = (await claude_client.complete(_MANUAL_PROMPT.format(th=table["threshold_hours"], table=table, rows=rows),
+    body_lines, body_section = await _body_numbers(today)
+    body = (await claude_client.complete(_MANUAL_PROMPT.format(th=table["threshold_hours"], table=table, rows=rows,
+                                                               body="\n".join(body_lines) or "（まだありません）"),
                                          max_tokens=1500) or "").strip()
     if not body:
         raise ValueError("マニュアルの文章を作れませんでした")
-    doc = f"# 自分取扱マニュアル\n\n更新: {util.fmt_datetime(util.now())}\n\n{body}\n"
+    doc = f"# 自分取扱マニュアル\n\n更新: {util.fmt_datetime(util.now())}\n\n{body}\n" + body_section
     store = notes.get_store()
     old = await asyncio.to_thread(store.read, vault_paths.health_manual())
     if old and old.strip():

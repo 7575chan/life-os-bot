@@ -1,7 +1,7 @@
 """作品管理シート（人生のすべてのプロジェクト。SPEC §5 03_CREATIVE「作品管理シート」）。
 
 - 正本はユーザーが手で管理している `WORKS_SHEET_ID` の `WORKS_TAB`（既定 `Main`）タブ。列は見出しの名前で探す
-- Bot が書いてよいのは `今やる？` `工程` `ストップ理由` `最終更新日` の4列だけ（`完了度` は進捗バーの数式なので書かない）。
+- Bot が書いてよいのは `今やる？` `工程` `ストップ理由` `最終更新日` `次やること` の5列だけ（`締切` は読むだけ）（`完了度` は進捗バーの数式なので書かない）。
   行の追加・削除・並べ替えはしない。書く直前にその行のタイトルを読み直し、違えば書かない。書く前に操作ログ（`14-ai`）に残す
 - シートは1回の操作につき1回だけ読み、5分間覚える（Sheets API の読み取り上限。SPEC §7）
 """
@@ -22,7 +22,9 @@ log = logging.getLogger("life-os.works")
 
 COL_NO, COL_NOW, COL_KIND, COL_TITLE, COL_STATUS = "#", "今やる？", "プロジェクト", "タイトル", "状況"
 COL_STAGE, COL_STOP, COL_UPDATED = "工程", "ストップ理由", "最終更新日"
-WRITABLE = (COL_NOW, COL_STAGE, COL_STOP, COL_UPDATED)
+COL_NEXT, COL_DEADLINE = "次やること", "締切"  # 締切は読むだけ（SPEC「プロジェクトボード」）
+WRITABLE = (COL_NOW, COL_STAGE, COL_STOP, COL_UPDATED, COL_NEXT)
+_KEYS = {COL_NOW: "now", COL_STAGE: "stage", COL_STOP: "stop", COL_UPDATED: "updated", COL_NEXT: "next"}
 NOW_MAX = 3
 YES, NO = "YES", "-"
 CONTINUING_KINDS = ("私生活",)  # 完成の無い「続ける」型（要件定義書 3-9）
@@ -74,7 +76,7 @@ def parse(values: list[list[str]]) -> tuple[list[str], list[dict]]:
             "kind": get(row, COL_KIND), "status": get(row, COL_STATUS), "stage": get(row, COL_STAGE),
             "stop": get(row, COL_STOP), "chars": _num(get(row, "現在の文字数")), "target": _num(get(row, "目標文字数")),
             "url": get(row, "URL"), "sheet_url": get(row, "シート"), "monetize": get(row, "収益化"),
-            "updated": get(row, COL_UPDATED),
+            "updated": get(row, COL_UPDATED), "next": get(row, COL_NEXT), "deadline": get(row, COL_DEADLINE),
         })
     return header, out
 
@@ -159,13 +161,16 @@ def now_projects(projects: list[dict]) -> list[dict]:
 
 
 def morning_section(projects: list[dict], tasks: list[dict], day: date) -> str | None:
-    """朝の案内の「📂 今やるプロジェクト」。タイトルと工程（続ける型は今週の回数）だけ。"""
+    """朝の案内の「📂 今やるプロジェクト」。タイトルと工程（続ける型は今週の回数）、次やること、まだ来ていない最初の締切。"""
+    import board  # 循環を避ける
     rows = []
     for p in now_projects(projects):
         if is_continuing(p):
-            rows.append(f"・{p['title']}（今週 {week_count(p, tasks, day)}回）")
+            row = f"・{p['title']}（今週 {week_count(p, tasks, day)}回）"
         else:
-            rows.append(f"・{p['title']}" + (f"（{p['stage']}）" if p.get("stage") else ""))
+            row = f"・{p['title']}" + (f"（{p['stage']}）" if p.get("stage") else "")
+        extra = [x for x in (f"次: {p['next']}" if p.get("next") else "", board.next_milestone(p, day)) if x]
+        rows.append(row + (" ／ " + " ／ ".join(extra) if extra else ""))
     return ("📂 今やるプロジェクト：\n" + "\n".join(rows)) if rows else None
 
 
@@ -195,7 +200,7 @@ def clear_cache() -> None:
 
 
 def write(p: dict, op: str, **fields) -> None:
-    """決まった4列だけを書く。fields のキーは列名（今やる？/工程/ストップ理由/最終更新日）。"""
+    """決まった5列だけを書く。fields のキーは列名（今やる？/工程/ストップ理由/最終更新日/次やること）。"""
     bad = [k for k in fields if k not in WRITABLE]
     if bad:
         raise ValueError(f"作品管理シートの {bad} には書けません")
@@ -225,8 +230,7 @@ def write(p: dict, op: str, **fields) -> None:
         for cp in _cache["projects"]:
             if cp["row"] == p["row"]:
                 for k, v in fields.items():
-                    key = {COL_NOW: "now", COL_STAGE: "stage", COL_STOP: "stop", COL_UPDATED: "updated"}[k]
-                    cp[key] = (v == YES) if k == COL_NOW else v
+                    cp[_KEYS[k]] = (v == YES) if k == COL_NOW else v
 
 
 def today_text() -> str:
@@ -237,22 +241,33 @@ def touch(p: dict, op: str = "最終更新日（作品管理シート）") -> No
     write(p, op, **{COL_UPDATED: today_text()})
 
 
-def touch_tasks(tasks: list[dict]) -> None:
-    """プロジェクトのタスク（出典 `作品#番号`）が完了したら、そのプロジェクトの最終更新日を書く。失敗しても止めない。"""
+def touch_tasks(tasks: list[dict]) -> list[dict]:
+    """プロジェクトのタスク（出典 `作品#番号`）が完了したら、そのプロジェクトの最終更新日を書く。
+    完了したタスクが `次やること` と同じなら、`次やること` を空にする（SPEC「プロジェクトボード」）。
+    書いたプロジェクトを返す。失敗しても止めない。"""
     if not enabled():
-        return
+        return []
     nos = {t.get("source", "")[len(SOURCE_PREFIX):]: t for t in tasks
            if str(t.get("source", "")).startswith(SOURCE_PREFIX)}
     if not nos:
-        return
+        return []
+    touched = []
     try:
         projects = load()
         for no, t in nos.items():
             for p in projects:
-                if str(p["no"]) == no and str(t.get("content", "")).startswith(p["title"]):
-                    touch(p)
+                content = str(t.get("content", ""))
+                if str(p["no"]) == no and content.startswith(p["title"]):
+                    what = content[len(p["title"]):].lstrip("｜|").strip()
+                    fields = {COL_UPDATED: today_text()}
+                    if p.get("next") and norm(p["next"]) == norm(what):
+                        fields[COL_NEXT] = ""
+                    write(p, "最終更新日（作品管理シート）" if len(fields) == 1 else "完了したので次やることを空にする（作品管理シート）",
+                          **fields)
+                    touched.append(p)
     except Exception:  # noqa: BLE001
         log.warning("作品管理シートの最終更新日を書けませんでした", exc_info=True)
+    return touched
 
 
 _GID = re.compile(r"[#&?]gid=(\d+)")
