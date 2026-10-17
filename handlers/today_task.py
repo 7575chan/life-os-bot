@@ -1,5 +1,6 @@
 """`01-today-task`: 朝の案内、今日のタスクの表示、緊急タスクの追加、完了の記録、メインとサブの入れ替え（SPEC §5）。"""
 import asyncio
+import logging
 import re
 import unicodedata
 from datetime import date, timedelta
@@ -10,12 +11,19 @@ import state
 import task_dates
 import task_sync
 import util
+import works
+
+log = logging.getLogger("life-os.today_task")
 
 MAIN_MAX = 3
 MAIN = "高"  # メイン = 優先度「高」（Obsidian の ⏫）。サブ = それ以外（SPEC §5 01-today-task）
 _DONE = re.compile(r"^\s*(?:完了|done|かんりょう)[\s:：]*(.+)$", re.I)
 _BULLET = re.compile(r"^\s*(?:[-*・•]|\[[ xX]?\])\s*")
-_SHOW = re.compile(r"^\s*(?:今日のタスク|タスク|一覧|リスト)\s*(?:を見せて|を表示)?\s*[?？]*\s*$")
+# 一覧を聞く言葉（メッセージ全体がこれだけのとき。タスクとして登録しない。SPEC §5 01-today-task）
+_ASK_TAIL = r"\s*(?:は|って|を)?\s*(?:何|なに|なん|ある|どれ|どんな|教えて|おしえて|見せて|みせて|表示|一覧|ですか|かな|でしょう|して)*\s*[?？!！。]*\s*$"
+_SHOW = re.compile(r"^\s*(?:今日の(?:タスク|予定|やること)|今日やること|タスク|一覧|リスト)" + _ASK_TAIL)
+_SHOW_ALL = re.compile(r"^\s*(?:(?:今ある|いまある|全部の|ぜんぶの|全ての|すべての|残りの|残ってる|のこりの|未完了の)(?:タスク|やること)"
+                       r"|タスク(?:全部|ぜんぶ|すべて|全て)|やることリスト|全タスク)" + _ASK_TAIL)
 _KIND = re.compile(r"^\s*(メイン|サブ)(?:\s*[:：]\s*|\s+)(.+)$", re.S)
 # 登録時の区分: 行末の「（サブ）」「【メイン】」「#サブ」、または「サブ：」だけの行（以降の行に効く）
 _KIND_SUFFIX = re.compile(r"^(.*?)\s*(?:[(（【\[]\s*(メイン|サブ)(?:タスク)?\s*[)）】\]]|[#＃](メイン|サブ))\s*$", re.S)
@@ -77,7 +85,8 @@ def format_task_list(tasks: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[str] | None = None) -> str:
+def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[str] | None = None,
+                    projects: str | None = None) -> str:
     """朝の案内の本文。昨日の執筆実績は、当日の記録（09:44）が入ったあとの別の投稿（scheduler.post_writing）で出す。
 
     overnight: 前日の夜の問いかけのあと（〜今朝）に完了したタスク。夜の問いかけに載らなかった分をここで出す。
@@ -88,6 +97,8 @@ def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[
     done = done_list.format_items(done_list.OVERNIGHT_TITLE, overnight or [])
     if done:
         parts.append(done)
+    if projects:  # 📂 今やるプロジェクト（作品管理シート。SPEC §5）
+        parts.append(projects)
     if tasks:
         parts.append(format_task_list(tasks))
         parts.append(f"（※未完了のタスクは、3日たつとバックログへ静かに移ります。{HINT}）")
@@ -114,7 +125,20 @@ async def build_morning(day: date) -> tuple[str, list[dict]]:
     score = await asyncio.to_thread(sheets.health_score_on, y)
     diary = await asyncio.to_thread(sheets.diary_on, y)
     line = health_line(score, (diary or {}).get("ご機嫌度") or None)
-    return compose_morning(tasks, line, await done_list.overnight_done(day)), tasks
+    return compose_morning(tasks, line, await done_list.overnight_done(day), await projects_section(day)), tasks
+
+
+async def projects_section(day: date) -> str | None:
+    """朝の案内の「📂 今やるプロジェクト」。作品管理シートが未設定・読めないときは省く。"""
+    if not works.enabled():
+        return None
+    try:
+        projects = await asyncio.to_thread(works.load, True)
+        tasks = await asyncio.to_thread(sheets.all_tasks) if any(works.is_continuing(p) for p in works.now_projects(projects)) else []
+        return works.morning_section(projects, tasks, day)
+    except Exception:  # noqa: BLE001
+        log.warning("作品管理シートを読めませんでした（朝の案内では省きます）", exc_info=True)
+        return None
 
 
 async def post_list(channel, header: str | None = None) -> None:
@@ -123,6 +147,41 @@ async def post_list(channel, header: str | None = None) -> None:
     body = (format_task_list(tasks) + f"\n\n（{HINT}）") if tasks else "今日のタスクは、今のところありません。"
     msg = await util.send_long(channel, (header + "\n\n" if header else "") + body)
     state.put_pending(msg.id, channel.id, "today_list", {"items": [{"id": t["id"], "content": t["content"]} for t in tasks]})
+
+
+BACKLOG_SHOW = 30
+
+
+def format_all(today: list[dict], all_tasks: list[dict], day: date) -> str:
+    """「今あるタスクは？」: 今日（番号つき。「完了 N」の番号と同じ）・予定あり（日付順）・バックログ（優先度順）。"""
+    ids = {t["id"] for t in today}
+    rest = [t for t in all_tasks if not t["done"] and not t["deleted"] and t["id"] not in ids]
+    future = sorted([t for t in rest if util.parse_date_any(t["scheduled"]) and util.parse_date_any(t["scheduled"]) > day],
+                    key=lambda t: (t["scheduled"], sheets.task_sort_key(t)))
+    backlog = sorted([t for t in rest if not t["scheduled"]], key=sheets.task_sort_key)
+    parts = [format_task_list(today) if today else "今日のタスクは、今のところありません。"]
+    if future:
+        parts.append("📅 予定が入っているタスク：\n" + "\n".join(
+            f"・{task_dates.fmt_md(util.parse_date_any(t['scheduled']))} {t['content']}" for t in future))
+    if backlog:
+        shown = backlog[:BACKLOG_SHOW]
+        more = f"\n（ほか {len(backlog) - len(shown)}件）" if len(backlog) > len(shown) else ""
+        parts.append("🗂 日付の無いタスク（バックログ）：\n" + "\n".join(
+            f"・{t['content']}" + (f"（期限 {task_dates.fmt_md(util.parse_date_any(t['due']))}）" if util.parse_date_any(t["due"]) else "")
+            for t in shown) + more)
+    return "\n\n".join(parts)
+
+
+async def post_all(channel) -> None:
+    """今あるタスクを全部（完了・削除を除く）投稿する。番号は今日の一覧と同じ。"""
+    day = util.activity_day()
+    today = ordered(await asyncio.to_thread(sheets.today_tasks, day))
+    every = await asyncio.to_thread(sheets.all_tasks)
+    body = format_all(today, every, day)
+    if today:
+        body += f"\n\n（{HINT}）"
+    msg = await util.send_long(channel, body)
+    state.put_pending(msg.id, channel.id, "today_list", {"items": [{"id": t["id"], "content": t["content"]} for t in today]})
 
 
 async def _items(channel) -> list[dict]:
@@ -279,6 +338,9 @@ async def handle(message) -> None:
     if not text:
         return
     channel = message.channel
+    if _SHOW_ALL.match(text):
+        await post_all(channel)
+        return
     if _SHOW.match(text):
         await post_list(channel)
         return
@@ -295,6 +357,8 @@ async def handle(message) -> None:
             await channel.send("その番号のタスクは見当たりませんでした。もう一度どうぞ。")
             return
         await asyncio.to_thread(task_sync.run_safely)
+        if works.enabled():  # プロジェクトのタスクなら、作品管理シートの最終更新日を書く（失敗しても止めない）
+            await asyncio.to_thread(lambda: works.touch_tasks(sheets.find_tasks(ids)))
         await util.ack(message, "✅")
         header = "✅ 完了にしました！\n" + "\n".join(f"・{c}" for c in done) + "\nおつかれさまです。"
         so_far = done_list.format_items(done_list.SO_FAR_TITLE,  # 今日完了したものを毎回全部見せる（件数は出さない）

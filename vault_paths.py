@@ -10,6 +10,11 @@ def room(key: str) -> str:
     return lifeos(_C[key])
 
 
+def stage_templates() -> str:
+    """工程テンプレート（作品管理シートの工程。ユーザーが直してよい）。"""
+    return lifeos(_C["others"], "工程テンプレート.md")
+
+
 def health_manual() -> str:
     return lifeos(_C["health"], "Health-Manual.md")
 

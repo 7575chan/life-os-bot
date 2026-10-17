@@ -38,6 +38,9 @@ GAS_RELAY_TOKEN = os.getenv("GAS_RELAY_TOKEN", "")  # 秘密情報。ログに�
 
 WORDCOUNT_SHEET_ID = os.getenv("WORDCOUNT_SHEET_ID", "")
 WORDCOUNT_TAB = os.getenv("WORDCOUNT_TAB", "シート1")
+# 作品管理シート（人生のすべてのプロジェクト。SPEC §5 03_CREATIVE）。未設定なら、この機能は何もしない
+WORKS_SHEET_ID = os.getenv("WORKS_SHEET_ID", "")
+WORKS_TAB = os.getenv("WORKS_TAB", "Main")
 
 WEATHER_LAT = float(os.getenv("WEATHER_LAT", "35.68"))
 WEATHER_LON = float(os.getenv("WEATHER_LON", "139.76"))

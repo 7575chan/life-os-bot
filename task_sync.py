@@ -225,8 +225,18 @@ def run(store=None) -> dict:
             for tid, fields in p.sheet_updates:
                 sheets.update_task(tid, **fields)
             state.set_kv(SNAPSHOT_KEY, json.dumps(p.snapshot))
+            _touch_projects(sheet_tasks, p.sheet_updates)
             return {"file_written": p.file_changed, "sheet_added": len(p.sheet_adds), "sheet_updated": len(p.sheet_updates)}
     raise RuntimeError("タスク棚の同期が競合しました（次回に再試行します）")
+
+
+def _touch_projects(sheet_tasks: list[dict], updates: list[tuple[str, dict]]) -> None:
+    """Obsidian で完了にしたプロジェクトのタスク（出典 `作品#番号`）→ 作品管理シートの最終更新日（SPEC §5）。"""
+    before = {t["id"]: t for t in sheet_tasks}
+    done = [before[tid] for tid, f in updates if f.get("done") and tid in before and not before[tid]["done"]]
+    if done:
+        import works  # 作品管理シートを使わない構成でも、同期は動くように
+        works.touch_tasks(done)
 
 
 def run_safely() -> dict | None:
