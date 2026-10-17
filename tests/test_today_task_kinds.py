@@ -294,3 +294,48 @@ def test_command_and_new_task_in_one_message(env):
     assert env.added[0][0] == "牛乳を買う" and env.added[0][1]["priority"] == "高"  # 空いたメイン枠に入る
     assert "サブにしました" in env.sent[-1] and "今日のタスクに追加しました" in env.sent[-1]
     assert env.reactions == ["🔀", "📝"]
+
+
+# ---------------------------------------------------------------- 一覧を聞く言葉（「今日のタスクは？」「今あるタスクは？」）
+
+
+@pytest.mark.parametrize("text", ["今日のタスクは？", "今日のタスクは?", "今日のタスクを教えて", "今日のタスクって何？",
+                                  "今日やることは？", "今日の予定は？", "タスクは？", "今日のタスク教えて！"])
+def test_today_question_words(text):
+    assert today_task._SHOW.match(text) and not today_task._SHOW_ALL.match(text)
+
+
+@pytest.mark.parametrize("text", ["今あるタスクは？", "今あるタスクを教えて", "全部のタスクは？", "タスク全部", "残りのタスクは？",
+                                  "全タスク", "やることリスト", "未完了のタスクを見せて"])
+def test_all_question_words(text):
+    assert today_task._SHOW_ALL.match(text)
+
+
+@pytest.mark.parametrize("text", ["今日のタスクは多い", "今あるタスクを整理する", "タスク管理の本を読む"])
+def test_question_words_do_not_catch_tasks(text):
+    assert not today_task._SHOW.match(text) and not today_task._SHOW_ALL.match(text)
+
+
+def test_today_question_posts_the_list_without_adding(env):
+    env.tasks = [task(1, "高"), task(2)]
+    run(today_task.handle(env.message("今日のタスクは？")))
+    assert env.added == [] and "1. タスク1" in env.sent[-1]
+
+
+def test_all_tasks_question(env, monkeypatch):
+    env.tasks = [task(1, "高")]
+    every = [dict(task(1, "高")),
+             {**task(2), "scheduled": "2026-09-23"},
+             {**task(3, "高"), "scheduled": "", "due": "2026-09-30"},
+             {**task(4), "scheduled": ""},
+             {**task(5), "scheduled": "", "done": True},
+             {**task(6), "scheduled": "", "deleted": True}]
+    monkeypatch.setattr(sheets, "all_tasks", lambda: every)
+    run(today_task.handle(env.message("今あるタスクは？")))
+    text = env.sent[-1]
+    assert env.added == []
+    assert "1. タスク1" in text
+    assert "📅 予定が入っているタスク：\n・9/23(水) タスク2" in text
+    assert "🗂 日付の無いタスク（バックログ）：\n・タスク3（期限 9/30(水)）\n・タスク4" in text
+    assert "タスク5" not in text and "タスク6" not in text
+    assert [i["id"] for i in env.pending["items"]] == ["lo-1"]  # 「完了 1」の番号は今日の一覧のまま
