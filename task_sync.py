@@ -16,6 +16,7 @@ import sheets
 import state
 import util
 from notes_policy import TASK_FILE
+import inbox_sync
 
 log = logging.getLogger("life-os.task_sync")
 
@@ -97,7 +98,8 @@ class SyncPlan:
 
 
 def _norm_sheet(s: dict) -> dict:
-    return {k: s.get(k, "") for k in ("id", "content", "done", "scheduled", "due", "priority", "created", "done_date")}
+    return {k: s.get(k, "") for k in ("id", "content", "done", "scheduled", "due", "priority", "created", "done_date",
+                                     "start")}
 
 
 def plan(file_text: str, sheet_tasks: list[dict], snapshot: dict, today: date) -> SyncPlan:
@@ -153,10 +155,16 @@ def plan(file_text: str, sheet_tasks: list[dict], snapshot: dict, today: date) -
             if not merged["done"]:
                 merged["done_date"] = ""
             merged.setdefault("created", ft.get("created") or s.get("created") or util.fmt_date(today))
-            if digest(merged) != hf or idx in dirty or merged.get("done_date") != ft.get("done_date"):
+            merged["start"] = ft.get("start") or s.get("start", "")  # 着手日（🛫）はどちらかにあれば残す
+            if (digest(merged) != hf or idx in dirty or merged.get("done_date") != ft.get("done_date")
+                    or merged["start"] != ft.get("start", "")):
                 lines[idx] = render(merged)
-            if digest(merged) != hs or merged.get("done_date") != s.get("done_date"):
-                updates.append((tid, {k: merged[k] for k in ("content", "done", "scheduled", "due", "priority", "done_date")}))
+            if (digest(merged) != hs or merged.get("done_date") != s.get("done_date")
+                    or merged["start"] != s.get("start", "")):
+                fields = {k: merged[k] for k in ("content", "done", "scheduled", "due", "priority", "done_date")}
+                if merged["start"] != s.get("start", ""):
+                    fields["start"] = merged["start"]  # 着手日の列が無い古いシートでも、着手日が無ければ書かない
+                updates.append((tid, fields))
             new_snap[tid] = digest(merged)
         elif f:  # Obsidian にだけある: 新規（または、シートから消えていたので戻す）
             idx, ft = f
@@ -212,7 +220,8 @@ def run(store=None) -> dict:
             text = store.read(TASK_FILE) or ""
             sheet_tasks = sheets.all_tasks()
             snapshot = json.loads(state.get_kv(SNAPSHOT_KEY, "{}"))
-            p = plan(text, sheet_tasks, snapshot, util.activity_day())  # 完了日の補完などは活動日（SPEC §7）
+            shelf = [t for t in sheet_tasks if t.get("source") != inbox_sync.SOURCE]  # 手書きページのタスクは棚に出さない
+            p = plan(text, shelf, snapshot, util.activity_day())  # 完了日の補完などは活動日（SPEC §7）
             if p.file_changed:
                 if store.modified(TASK_FILE) != before:  # 読み込み後に Obsidian 側で編集された → 再計算
                     log.info("task file changed during sync; retry %d", attempt + 1)
@@ -221,11 +230,16 @@ def run(store=None) -> dict:
             for t in p.sheet_adds:
                 sheets.add_task(t["content"], scheduled=t.get("scheduled", ""), due=t.get("due", ""),
                                 priority=t.get("priority", ""), source=t.get("source", "obsidian"), task_id=t["id"],
-                                done=t["done"], done_date=t.get("done_date", ""), created=t.get("created") or None)
+                                done=t["done"], done_date=t.get("done_date", ""), created=t.get("created") or None,
+                                start=t.get("start", ""))
             for tid, fields in p.sheet_updates:
                 sheets.update_task(tid, **fields)
             state.set_kv(SNAPSHOT_KEY, json.dumps(p.snapshot))
             _touch_projects(sheet_tasks, p.sheet_updates)
+            try:  # 手書きのタスクページ（§6.4）。失敗しても棚の同期は成功として返す
+                inbox_sync.run(store, sheet_tasks)
+            except Exception:  # noqa: BLE001
+                log.exception("手書きのタスクページの同期に失敗しました（次回にやり直します）")
             return {"file_written": p.file_changed, "sheet_added": len(p.sheet_adds), "sheet_updated": len(p.sheet_updates)}
     raise RuntimeError("タスク棚の同期が競合しました（次回に再試行します）")
 

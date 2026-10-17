@@ -180,3 +180,13 @@ def test_ids_assigned_do_not_collide_with_sheet_ids():
     p = ts.plan(text, [sheet("lo-zzzzzz", "x")], {}, TODAY)
     ids = [a["id"] for a in p.sheet_adds]
     assert len(set(ids)) == 30 and "lo-zzzzzz" not in ids
+
+
+def test_start_date_from_sheet_reaches_file_and_back():
+    old = sheet("lo-a1", "書く")
+    started = {**sheet("lo-a1", "書く"), "start": "2026-09-19"}
+    text = "- [ ] 書く 🆔 lo-a1 ➕ 2026-09-01\n"
+    p = ts.plan(text, [started], snap_of(old), TODAY)
+    assert p.file_changed and "🛫 2026-09-19" in p.text
+    p2 = ts.plan("- [ ] 書く 🆔 lo-a1 ➕ 2026-09-01 🛫 2026-09-18\n", [old], snap_of(old), TODAY)
+    assert p2.sheet_updates and p2.sheet_updates[0][1].get("start") == "2026-09-18"

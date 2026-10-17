@@ -40,9 +40,11 @@ def test_plan_task_today_and_due():
 
 
 def test_plan_task_due_only_still_goes_on_todays_list():
-    p = today_task.plan_task("明日までに資料を送る", TODAY)
+    p = today_task.plan_task("資料を送る 期限は明日", TODAY)
     assert (p["content"], p["scheduled"], p["due"], p["priority"], p["future"]) == ("資料を送る", "2026-09-20", "2026-09-21", "高", False)
     assert p["label"] == "資料を送る（期限 9/21(月)）"  # 書かれた日付だけを表示（実行日は書かれていない）
+    p = today_task.plan_task("明日までに資料を送る", TODAY)  # 「〜までに」は文字のまま（2026-10-17）
+    assert (p["content"], p["scheduled"], p["due"]) == ("明日までに資料を送る", "2026-09-20", "")
 
 
 def test_plan_task_future_scheduled_is_not_urgent():
@@ -76,11 +78,11 @@ def test_multiline_message_creates_one_task_per_line_with_dates(today_env):
     run(today_task.handle(today_env.message("牛乳を買う 今日やる\n企画書 9/30まで\nレポート 来週の月曜にやる")))
     assert today_env.added == [
         ("牛乳を買う", {"scheduled": "2026-09-20", "due": "", "priority": "高", "source": "01-today-task"}),
-        ("企画書", {"scheduled": "2026-09-20", "due": "2026-09-30", "priority": "高", "source": "01-today-task"}),
+        ("企画書 9/30まで", {"scheduled": "2026-09-20", "due": "", "priority": "高", "source": "01-today-task"}),
         ("レポート", {"scheduled": "2026-09-21", "due": "", "priority": "", "source": "01-today-task"}),
     ]
     reply = today_env.sent[0]
-    assert "・企画書（期限 9/30(水)）" in reply and "・レポート（実行日 9/21(月)）" in reply
+    assert "・企画書 9/30まで\n" in reply and "・レポート（実行日 9/21(月)）" in reply
     assert "その日の朝に案内します" in reply  # 実行日が未来のタスクがあるので説明が付く
     assert today_env.reactions == ["📝"]
 
@@ -129,12 +131,12 @@ def test_evening_tasks_get_dates_and_the_reply_lists_them(monkeypatch, tmp_path)
     run(looking_back._journal(msg, msg.content))
     assert added == [
         ("第3章のプロットを書く", {"scheduled": "2026-09-21", "due": "", "source": "03-looking-back"}),
-        ("資料を送る", {"scheduled": "", "due": "2026-09-30", "source": "03-looking-back"}),
+        ("資料を送る 9/30まで", {"scheduled": "", "due": "", "source": "03-looking-back"}),
         ("牛乳を買う", {"scheduled": "", "due": "", "source": "03-looking-back"}),  # 日付なし → バックログ（夜の番号選択の候補）
     ]
     text = "\n".join(sent)
     assert "📌 日付を設定しました：" in text
-    assert "・第3章のプロットを書く（実行日 9/21(月)）" in text and "・資料を送る（期限 9/30(水)）" in text
+    assert "・第3章のプロットを書く（実行日 9/21(月)）" in text and "資料を送る" not in text.split("📌")[1]
     assert "牛乳を買う" not in text
 
 
@@ -171,7 +173,7 @@ def test_idea_task_with_deadline_sets_due_and_stays_silent(monkeypatch, tmp_path
     monkeypatch.setattr(idea, "_write_lock", asyncio.Lock())
     msg = NS(content="明日までに歯医者に電話する", attachments=[], channel=NS(send=send), add_reaction=react)
     run(idea.handle(msg))
-    assert added == [("歯医者に電話する", {"scheduled": "", "due": task_dates.iso(tomorrow), "source": "09-idea"})]
+    assert added == [("明日までに歯医者に電話する", {"scheduled": "", "due": "", "source": "09-idea"})]  # 「〜までに」は文字のまま
     assert reactions == ["📝", "📋"] and sent == []
 
 

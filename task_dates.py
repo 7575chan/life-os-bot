@@ -8,9 +8,14 @@
   「来週の月曜にやる 期限は月末」 → 実行日 9/21、期限 9/30（週は月曜始まり。日曜日の「来週の月曜」は明日）
 
 判定ルール:
-  - 日付の直後が「まで / までに / 以内 / 期限 / 締切」、または直前が「期限は / 締切:」なら **期限**、それ以外は **実行日**
+  - 直前が「期限は / 締切:」なら **期限**
+  - 直後が「まで / までに / 以内 / 中に」の日付（「11/2までに」「今週中に」）は、**期限にも実行日にもせず、文字のまま残す**
+    （2026-10-17 ユーザー決定。Obsidian の一覧で、やる日ではない日に出てしまうため）
+  - それ以外は **実行日**
   - 日付の直後が「の」（例: 10/5のライブ）なら、タスクの日付ではなく名詞の一部なので無視する
     （例外: 「明日の朝」のような時間帯の言葉が続く場合）
+  - 「2/3を推敲」のように、月/日の形の直後が「を・が・と・も・や」なら、分数や話数とみなして日付にしない
+  - 先頭の「10/18｜」のような区切り記号（｜ | ・）は、日付と一緒に取り除く
   - 「毎週月曜」のような繰り返し、「3日間」「1日3回」のような期間・回数は日付として扱わない
   - 解釈できない表現は、そのまま内容に残す（日付なしで登録する。勝手に推測しない）
 """
@@ -44,7 +49,7 @@ _DUE_AFTER = re.compile(r"^\s*(?:までに?|迄に?|以内に?|中に?|期限|�
 _DUE_BEFORE = re.compile(r"(?:期限|締切|締め切り|〆切|デッドライン)\s*(?:は|が|：|:)?\s*$")
 _SCHED_AFTER = re.compile(r"^(?:に|は)?\s*(?:やる|する|やります|します|予定|から)?")  # 「明日は〜」「9/25に〜」の「は」「に」も取り除く
 _RECURRING_BEFORE = re.compile(r"(?:毎週|毎月|毎日|隔週)\s*$")
-_PUNCT = " 　、,。:：\t"
+_PUNCT = " 　、,。:：\t|｜・"  # 「10/18｜〜」の区切り記号も取り除く
 
 
 @dataclass
@@ -140,6 +145,8 @@ def extract(text: str, today: date) -> Extracted:
             rest = src[end:]
         elif rest.startswith("の") and not _DUE_AFTER.match(rest):
             continue  # 「10/5のライブ」: 日付は名詞の一部
+        if m.group("md") and rest[:1] and rest[:1] in "をがともや":
+            continue  # 「2/3を推敲」「1/2が終わった」: 分数・話数などで、日付ではない（推測しない）
         if m.group("wd") and re.match(r"[一-鿿]", rest[:1]):
             continue  # 「日曜大工」「月曜会議」のように、漢字が続く名詞は曜日として読まない
         d = _resolve(m, today)
@@ -147,7 +154,9 @@ def extract(text: str, today: date) -> Extracted:
             continue
         before = _DUE_BEFORE.search(src[:start])
         after = _DUE_AFTER.match(rest)
-        if before or after or m.group("span"):
+        if not before and (after or m.group("span")):
+            continue  # 「11/2までに」「今週中に」: 期限にはせず、文字のまま内容に残す（2026-10-17 ユーザー決定）
+        if before:
             if due is not None:
                 continue
             due = d

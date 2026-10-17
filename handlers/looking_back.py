@@ -67,7 +67,9 @@ async def build_prompt() -> tuple[str, list[str]]:
     w = await weather.today_weather()
     day = journal_day(util.now())
     completed = await done_list.completed_on(day)
+    started = await done_list.started_on(day)
     sections = [s for s in (done_list.format_items(done_list.TODAY_TITLE, [t["content"] for t in completed]),
+                            done_list.format_items(done_list.STARTED_TITLE, [t["content"] for t in started]),
                             format_done(await private.today_done(day))) if s]
     lines = [EVENING_PREFIX + "🌙"]
     if w:
@@ -87,6 +89,7 @@ async def diary_lists(day: date) -> str:
     parts = []
     for kind, title, items in (
             ("tasks", "### ✅ 今日完了したタスク", [t["content"] for t in await done_list.completed_on(day)]),
+            ("started", "### 🌱 今日手を付けたタスク", [t["content"] for t in await done_list.started_on(day)]),
             ("done", "### ✅ 今日やったこと", await private.today_done(day))):
         new = done_list.diary_new(day, kind, items)
         if new:
@@ -99,7 +102,7 @@ def remember_diary_lists(day: date, text: str) -> None:
     kind = None
     for line in text.splitlines():
         if line.startswith("### "):
-            kind = "tasks" if "タスク" in line else "done"
+            kind = "started" if "手を付けた" in line else "tasks" if "タスク" in line else "done"
         elif line.startswith("- ") and kind:
             done_list.remember_diary(day, kind, [line[2:]])
 

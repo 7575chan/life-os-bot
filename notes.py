@@ -99,6 +99,31 @@ def _matches(text: str, words: list[str]) -> bool:
 # ---------------------------------------------------------------- バックエンド（直接使用禁止。GuardedStore 経由）
 
 
+_MARK_LINE = re.compile(r"^(\s*[-*+]\s+\[)([ xX])(\].*)$")
+_SCHED_MARK = re.compile(r"\s*⏳\ufe0f?\s*\d{4}-\d{2}-\d{2}")
+
+
+def marks_only_problem(old: str, new: str) -> str | None:
+    """手書きのタスクページ（SPEC §6.4）: 変わったのが「チェック（[ ]→[x]）」と「⏳ 日付」だけなら None。
+    それ以外の違いが1文字でもあれば、その理由。"""
+    a, b = old.split("\n"), new.split("\n")
+    if len(a) != len(b):
+        return "行の数が変わる"
+    for i, (x, y) in enumerate(zip(a, b), 1):
+        if x == y:
+            continue
+        mx, my = _MARK_LINE.match(x), _MARK_LINE.match(y)
+        if not mx or not my:
+            return f"{i}行目がタスクの行ではない"
+        if mx.group(1) != my.group(1):
+            return f"{i}行目の行頭が変わる"
+        if mx.group(2) != my.group(2) and not (mx.group(2) == " " and my.group(2) in "xX"):
+            return f"{i}行目のチェックを外すことになる"
+        if _SCHED_MARK.sub("", mx.group(3)).rstrip() != _SCHED_MARK.sub("", my.group(3)).rstrip():
+            return f"{i}行目の文が変わる"
+    return None
+
+
 class LocalStore:
     """Vault ディレクトリを直接操作する (開発用)。"""
 
@@ -125,6 +150,14 @@ class LocalStore:
     def write(self, path: str, text: str) -> str:
         p = self._p(path, "write")
         p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return str(p)
+
+    def write_marks(self, path: str, text: str) -> str:
+        """既存ファイルの書き換えだけ（作らない）。内容の確認は GuardedStore.write_marks が行う。"""
+        p = self._p(path, "write_marks")
+        if not p.is_file():
+            raise FileNotFoundError(path)
         p.write_text(text, encoding="utf-8")
         return str(p)
 
@@ -441,6 +474,20 @@ class DriveStore:
         return self._put(path, data, mime, None)
 
     @_synchronized
+    def write_marks(self, path: str, text: str) -> str:
+        """手書きのタスクページの書き換え（既存ファイルだけ。作らない・中継も使わない）。"""
+        n = policy.normalize(path)
+        if not policy.is_allowed(n, "write_marks"):  # バックエンド側でも二重に確認
+            raise AccessDenied(f"書き込み許可リスト外です: {n!r}")
+        f, _, _ = self._locate(n)
+        if not f:
+            raise FileNotFoundError(n)
+        data = text.encode("utf-8")
+        url = self._update_existing(f["id"], data, "text/markdown")
+        self._after_update(n, data, "text/markdown")
+        return url
+
+    @_synchronized
     def rename(self, old: str, new: str) -> None:
         for p in (old, new):
             if not policy.is_allowed(policy.normalize(p), "rename"):
@@ -570,6 +617,20 @@ class GuardedStore:
 
     def write_bytes(self, path: str, data: bytes, mime: str = "application/octet-stream") -> str:
         return self._b.write_bytes(policy.check(path, "write"), data, mime)
+
+    def write_marks(self, path: str, text: str) -> str:
+        """手書きのタスクページ（SPEC §6.4）。今の内容と比べ、チェックと ⏳ 以外が変わるなら書かずに AccessDenied。"""
+        n = policy.check(path, "write_marks")
+        current = self._b.read(n)
+        if current is None:
+            raise FileNotFoundError(n)
+        problem = marks_only_problem(current, text)
+        if problem:
+            policy.log.error("DENIED write_marks %r: %s", n, problem)
+            raise AccessDenied(f"手書きのタスクページには、チェックと ⏳ 以外を書けません（{problem}）")
+        if current == text:
+            return ""
+        return self._b.write_marks(n, text)
 
     def rename(self, old: str, new: str) -> None:
         # 移動元・移動先の両方が書き込み許可内であること

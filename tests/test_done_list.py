@@ -188,3 +188,17 @@ def test_journal_appends_lists_once_per_item(monkeypatch, tmp_path, kv, sheet):
     diary = next((tmp_path / "06-Life-OS" / "03-looking-back").glob("*.md")).read_text(encoding="utf-8")
     assert diary.count("- 企画書") == 1 and diary.count("- 洗濯") == 1  # 2回目は新しい分だけ
     assert "### ✅ 今日完了したタスク\n- 電話" in diary
+
+
+def test_started_on_lists_only_unfinished_started_tasks(monkeypatch):
+    import asyncio
+    from datetime import date
+
+    import done_list
+    import sheets
+    rows = [{"id": "a", "content": "A", "start": "2026-10-17", "done": False, "deleted": False},
+            {"id": "b", "content": "B", "start": "2026-10-17", "done": True, "deleted": False},
+            {"id": "c", "content": "C", "start": "2026-10-16", "done": False, "deleted": False},
+            {"id": "d", "content": "D", "start": "", "done": False, "deleted": False}]
+    monkeypatch.setattr(sheets, "all_tasks", lambda: rows)
+    assert [t["id"] for t in asyncio.run(done_list.started_on(date(2026, 10, 17)))] == ["a"]

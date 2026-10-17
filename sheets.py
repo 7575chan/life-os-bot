@@ -37,7 +37,7 @@ OPLOG = _C["ai"]
 _PROJECT_COLUMNS = ["日時", "作品名", "種別", "内容"]
 
 SCHEMA: dict[str, list[str]] = {
-    TASKS: ["ID", "登録日", "内容", "完了", "実行予定日", "期限", "優先度", "出典", "完了日"],
+    TASKS: ["ID", "登録日", "内容", "完了", "実行予定日", "期限", "優先度", "出典", "完了日", "着手日"],
     HEALTH: ["日時", "睡眠時間", "歩数・運動", "客観指標", "主観メモ", "AI判定", "体調スコア"],
     DIARY: ["日付", "ご機嫌度", "天気", "本文", "Obsidianリンク"],
     REPORTS: ["発行日", "種別", "本文"],
@@ -309,7 +309,7 @@ def insert_row(name: str, row: int, data: dict) -> None:
 
 _TASK_COLUMNS = {  # タスク dict のキー -> シートの列名
     "content": "内容", "scheduled": "実行予定日", "due": "期限", "priority": "優先度",
-    "done_date": "完了日", "source": "出典", "created": "登録日",
+    "done_date": "完了日", "source": "出典", "created": "登録日", "start": "着手日",
 }
 
 
@@ -325,6 +325,7 @@ def _task(row: int, rec: dict) -> dict:
     return {"row": row, "id": rec["ID"].strip(), "content": rec["内容"].strip(), "done": util.is_done(flag),
             "deleted": flag == DELETED, "scheduled": rec["実行予定日"].strip(), "due": rec["期限"].strip(),
             "priority": rec["優先度"].strip(), "created": rec["登録日"].strip(), "done_date": rec["完了日"].strip(),
+            "start": str(rec.get("着手日", "")).strip(),
             "source": rec["出典"].strip()}
 
 
@@ -357,11 +358,12 @@ def all_tasks() -> list[dict]:
 
 @locked
 def add_task(content: str, scheduled: str = "", due: str = "", priority: str = "", source: str = "",
-             task_id: str | None = None, done: bool = False, done_date: str = "", created: str | None = None) -> str:
+             task_id: str | None = None, done: bool = False, done_date: str = "", created: str | None = None,
+             start: str = "") -> str:
     tid = task_id or new_task_id()
     append(TASKS, {"ID": tid, "登録日": created or util.fmt_date(util.activity_day()), "内容": content,
                    "完了": "TRUE" if done else "", "実行予定日": scheduled, "期限": due, "優先度": priority,
-                   "出典": source, "完了日": done_date})
+                   "出典": source, "完了日": done_date, **({"着手日": start} if start else {})})
     return tid
 
 
@@ -391,7 +393,7 @@ def find_tasks(ids: list[str]) -> list[dict]:
 
 @locked
 def today_tasks(day: date) -> list[dict]:
-    """実行予定日が day 以前の未完了タスク（3日以内の持ち越しを含む）。優先度・期限順。"""
+    """実行予定日が day 以前の未完了タスク（持ち越しを含む。Bot は勝手に動かさない）。優先度・期限順。"""
     out = []
     for t in all_tasks():
         d = util.parse_date_any(t["scheduled"])
@@ -437,17 +439,6 @@ def set_priority(ids: list[str], priority: str) -> list[str]:
             changed.append(t["content"])
     update_rows(TASKS, ups)
     return changed
-
-
-@locked
-def cleanup_stale(day: date) -> int:
-    """実行予定日から3日以上経った未完了タスクを、通知なしでバックログへ戻す。"""
-    n = 0
-    for t in all_tasks():
-        if not t["done"] and not t["deleted"] and util.is_stale(t["scheduled"], day):
-            update_row(TASKS, t["row"], {"実行予定日": ""})
-            n += 1
-    return n
 
 
 @locked

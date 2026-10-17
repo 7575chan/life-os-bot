@@ -16,10 +16,12 @@ import config
 
 LIFEOS_DIR = "06-Life-OS"
 TASK_FILE = unicodedata.normalize("NFC", config.OBSIDIAN_TASK_FILE)
+# 手書きのタスクページ（SPEC §6.4）。書けるのは「write_marks」（チェックと ⏳ だけの書き換え。内容は notes.GuardedStore が比べる）
+INBOX_FILE = unicodedata.normalize("NFC", config.OBSIDIAN_INBOX_FILE) if config.OBSIDIAN_INBOX_FILE else ""
 VAULT_ROOT = ""  # Vault のルート（list のみ許可）
 
 READ_OPS = {"read", "list"}
-WRITE_OPS = {"write", "rename", "delete"}
+WRITE_OPS = {"write", "rename", "delete", "write_marks"}
 OPS = READ_OPS | WRITE_OPS
 _TASK_FILE_WRITE_OPS = {"write"}  # タスク棚は内容の書き換えのみ
 
@@ -68,6 +70,10 @@ def _decide(path: str, op: str) -> tuple[str, str | None]:
     if op in READ_OPS:
         return n, None
     # ---- 書き込み系
+    if INBOX_FILE and n == INBOX_FILE:
+        return n, None if op == "write_marks" else "手書きのタスクページは、チェックと ⏳ の書き換えのみ可能です"
+    if op == "write_marks":
+        return n, "チェックと ⏳ だけの書き換えは、手書きのタスクページにだけ使えます"
     if n == TASK_FILE:
         return n, None if op in _TASK_FILE_WRITE_OPS else "タスク棚は内容の書き換えのみ可能です"
     if n == LIFEOS_DIR:
