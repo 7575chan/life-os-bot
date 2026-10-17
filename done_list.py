@@ -9,12 +9,14 @@ from datetime import date, timedelta
 
 import sheets
 import state
+import util
 
 log = logging.getLogger(__name__)
 
 TODAY_TITLE = "✅ 今日完了したタスク："
 SO_FAR_TITLE = "🌟 今日完了したタスク："
 OVERNIGHT_TITLE = "🌙 昨夜から今朝までに完了したタスク："
+STARTED_TITLE = "🌱 今日手を付けたタスク："
 
 
 def format_items(title: str, items: list[str]) -> str | None:
@@ -31,6 +33,18 @@ async def completed_between(start: date, end: date) -> list[dict]:
 
 async def completed_on(day: date) -> list[dict]:
     return await completed_between(day, day + timedelta(days=1))
+
+
+async def started_on(day: date) -> list[dict]:
+    """その日に「着手」したタスクのうち、まだ完了していないもの（完了したものは完了の一覧に出る）。"""
+    iso = day.isoformat()
+    try:
+        tasks = await asyncio.to_thread(sheets.all_tasks)
+    except Exception:  # noqa: BLE001
+        log.warning("着手したタスクを読めませんでした", exc_info=True)
+        return []
+    return [t for t in tasks if not t.get("done") and not t.get("deleted")
+            and (d := util.parse_date_any(t.get("start") or "")) and d.isoformat() == iso]
 
 
 # ---------------------------------------------------------------- 夜の問いかけに載せたもの（朝の案内で重ねて出さない）

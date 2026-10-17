@@ -21,6 +21,8 @@ CREDENTIALS_FILE = str(BASE_DIR / os.getenv("CREDENTIALS_FILE", "credentials.jso
 
 OBSIDIAN_BACKEND = os.getenv("OBSIDIAN_BACKEND", "drive")  # drive | local (local は開発用)
 OBSIDIAN_TASK_FILE = os.getenv("OBSIDIAN_TASK_FILE", "01🗃Task/01 Life-OS-Task.md")
+# 手書きのタスクページ（SPEC §6.4）。Bot が書いてよいのはチェックと ⏳ だけ。空にすると読み込まない
+OBSIDIAN_INBOX_FILE = os.getenv("OBSIDIAN_INBOX_FILE", "01🗃Task/00Task Inbox-2026.md")
 
 # local: Vault のパス (開発用)
 OBSIDIAN_VAULT_DIR = Path(os.getenv("OBSIDIAN_VAULT_DIR", "./vault"))

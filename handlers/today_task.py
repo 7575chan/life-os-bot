@@ -12,6 +12,7 @@ import task_dates
 import task_sync
 import util
 import works
+from handlers import week_plan
 
 log = logging.getLogger("life-os.today_task")
 
@@ -46,6 +47,7 @@ _CMD_WORDS = re.compile(r"(?:メイン|サブ|タスク|入れ替え|入替え?|
 SWAP = "入れ替え"
 SOURCE = "01-today-task"
 MORNING_PREFIX = "おはようございます！ 本日のタスク案内"
+PLAN_HINT = "🗓 今週の計画がまだなら『今週の計画』と書くと一緒に作れます（なしでも大丈夫です）"
 HINT = "「完了 1,3」で完了、「メイン 4」「サブ 1」「メイン 4 サブ 1」「2と5を入れ替え」でメインとサブを変えられます"
 FULL_NOTE = "メインが3件そろっているので、サブに入れました（「メイン 4 サブ 1」のように番号で入れ替えられます）"
 OVER_NOTE = "メインは3件までです。今回は何も変えていません。「メイン 4 サブ 1」のように、サブにする番号も一緒に書くと入れ替えられます。"
@@ -86,11 +88,12 @@ def format_task_list(tasks: list[dict]) -> str:
 
 
 def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[str] | None = None,
-                    projects: str | None = None) -> str:
+                    projects: str | None = None, day: date | None = None, plan_hint: bool = False) -> str:
     """朝の案内の本文。昨日の執筆実績は、当日の記録（09:44）が入ったあとの別の投稿（scheduler.post_writing）で出す。
 
     overnight: 前日の夜の問いかけのあと（〜今朝）に完了したタスク。夜の問いかけに載らなかった分をここで出す。
     """
+    day = day or util.activity_day()
     parts = [MORNING_PREFIX + " ☀️"]
     if health_line:
         parts.append(health_line)
@@ -101,9 +104,14 @@ def compose_morning(tasks: list[dict], health_line: str | None, overnight: list[
         parts.append(projects)
     if tasks:
         parts.append(format_task_list(tasks))
-        parts.append(f"（※未完了のタスクは、3日たつとバックログへ静かに移ります。{HINT}）")
+        note = HINT
+        if any((d := util.parse_date_any(t.get("scheduled", ""))) and d < day for t in tasks):
+            note += "。持ち越しは『移す 番号 明日』のように動かせます"
+        parts.append(f"（{note}）")
     else:
         parts.append("今日のタスクはまだありません。ここに書き込むと、今日のタスクに追加されます。夜の振り返りで、明日やるものを選ぶこともできます🌙")
+    if plan_hint:
+        parts.append(PLAN_HINT)
     return "\n\n".join(parts)
 
 
@@ -117,15 +125,16 @@ def health_line(score: int | None, mood: str | None) -> str | None:
 
 
 async def build_morning(day: date) -> tuple[str, list[dict]]:
-    """朝の案内の本文と、番号に対応するタスク一覧（番号の順）。日付が変わった直後の整理（3日たった未完了の退避）を先に行う。"""
-    await asyncio.to_thread(sheets.cleanup_stale, day)
+    """朝の案内の本文と、番号に対応するタスク一覧（番号の順）。持ち越しは勝手に動かさない（SPEC §5「週の計画」）。"""
     await asyncio.to_thread(task_sync.run_safely)
     tasks = ordered(await asyncio.to_thread(sheets.today_tasks, day))
     y = day - timedelta(days=1)
     score = await asyncio.to_thread(sheets.health_score_on, y)
     diary = await asyncio.to_thread(sheets.diary_on, y)
     line = health_line(score, (diary or {}).get("ご機嫌度") or None)
-    return compose_morning(tasks, line, await done_list.overnight_done(day), await projects_section(day)), tasks
+    plan_hint = day.weekday() == 0 and not week_plan.planned(day)
+    return compose_morning(tasks, line, await done_list.overnight_done(day), await projects_section(day),
+                           day, plan_hint), tasks
 
 
 async def projects_section(day: date) -> str | None:
@@ -338,6 +347,8 @@ async def handle(message) -> None:
     if not text:
         return
     channel = message.channel
+    if await week_plan.handle(message, text, _items):  # 週の計画・移す・今日は休む・着手・最初の5分
+        return
     if _SHOW_ALL.match(text):
         await post_all(channel)
         return
