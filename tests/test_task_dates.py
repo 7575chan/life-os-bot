@@ -37,17 +37,12 @@ def test_scheduled_date_phrases(text, content, scheduled):
 
 
 @pytest.mark.parametrize("text,content,due", [
-    ("明日までに資料を送る", "資料を送る", date(2026, 9, 21)),
-    ("資料を送る 明日まで", "資料を送る", date(2026, 9, 21)),
     ("企画書 期限は9月30日", "企画書", date(2026, 9, 30)),
     ("企画書 締切：10/5", "企画書", date(2026, 10, 5)),
     ("〆切は明後日 企画書", "企画書", date(2026, 9, 22)),
-    ("請求書を出す 月末までに", "請求書を出す", date(2026, 9, 30)),
-    ("報告書 来月末まで", "報告書", date(2026, 10, 31)),
-    ("2026-10-01までに提出", "提出", date(2026, 10, 1)),
-    ("25日まで 書類", "書類", date(2026, 9, 25)),
+    ("請求書を出す 期限は月末", "請求書を出す", date(2026, 9, 30)),
 ])
-def test_due_date_phrases(text, content, due):
+def test_due_date_phrases(text, content, due):  # 期限になるのは「期限は」「締切」が前に付いたときだけ
     assert ex(text) == (content, None, due)
 
 
@@ -75,8 +70,8 @@ def test_scheduled_and_due_in_one_message():
 ])
 def test_weekdays(text, expected):
     r = td.extract(text, TODAY)
-    if expected is None:
-        assert r.due == date(2026, 9, 25) and r.scheduled is None
+    if expected is None:  # 「金曜までに」は文字のまま（2026-10-17 決定）
+        assert r.due is None and r.scheduled is None and r.content == text
     else:
         assert r.scheduled == expected
 
@@ -89,8 +84,8 @@ def test_past_month_day_means_next_year_and_day_of_month_rolls_over():
 
 
 def test_month_end_handles_february_and_leap_years():
-    assert td.extract("月末までに", date(2028, 2, 10)).due == date(2028, 2, 29)
-    assert td.extract("来月末まで", date(2026, 1, 31)).due == date(2026, 2, 28)
+    assert td.extract("期限は月末", date(2028, 2, 10)).due == date(2028, 2, 29)
+    assert td.extract("締切は来月末", date(2026, 1, 31)).due == date(2026, 2, 28)
 
 
 @pytest.mark.parametrize("text", [
@@ -110,21 +105,18 @@ def test_things_that_are_not_task_dates_are_left_alone(text):
     assert content == text
 
 
-@pytest.mark.parametrize("text,content,due", [
-    ("今日中に資料を送る", "資料を送る", date(2026, 9, 20)),
-    ("明日中にやる 請求書", "やる 請求書", date(2026, 9, 21)),
-    ("今週中に企画書", "企画書", date(2026, 9, 20)),      # 今日は日曜日 = 今週の最終日
-    ("来週中に企画書", "企画書", date(2026, 9, 27)),
-    ("今月中に契約", "契約", date(2026, 9, 30)),
-    ("来月中に契約", "契約", date(2026, 10, 31)),
+@pytest.mark.parametrize("text", [
+    "明日までに資料を送る", "資料を送る 明日まで", "請求書を出す 月末までに", "報告書 来月末まで", "2026-10-01までに提出",
+    "25日まで 書類", "今日中に資料を送る", "今週中に企画書", "来月中に契約",
 ])
-def test_within_period_phrases_are_deadlines(text, content, due):
-    assert ex(text) == (content, None, due)
+def test_until_phrases_stay_as_text(text):
+    """「〜までに」「〜中に」は期限にも実行日にもせず、文字のまま残す（2026-10-17 ユーザー決定）。"""
+    assert ex(text) == (text, None, None)
 
 
 def test_time_of_day_after_the_date_is_part_of_the_date_phrase():
     assert ex("明日の夜に電話") == ("電話", date(2026, 9, 21), None)
-    assert ex("明日の午後までに提出") == ("提出", None, date(2026, 9, 21))
+    assert ex("明日の午後までに提出") == ("明日の午後までに提出", None, None)
 
 
 def test_first_scheduled_and_first_due_win_and_others_stay_in_the_text():
@@ -153,7 +145,7 @@ def test_describe_and_fmt():
 
 def test_leading_date_with_bar_and_due():
     e = td.extract("10/18｜11/2までにラプラスのキャラシをする", date(2026, 10, 17))
-    assert (e.content, e.scheduled, e.due) == ("ラプラスのキャラシをする", date(2026, 10, 18), date(2026, 11, 2))
+    assert (e.content, e.scheduled, e.due) == ("11/2までにラプラスのキャラシをする", date(2026, 10, 18), None)
     assert td.extract("10/18|キャラシ", date(2026, 10, 17)).content == "キャラシ"
 
 

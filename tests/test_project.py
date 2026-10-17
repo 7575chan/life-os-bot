@@ -222,7 +222,7 @@ def test_ai_can_route_to_an_existing_work_or_start_a_new_one(env):
 def test_next_todo_becomes_a_high_priority_task_and_later_becomes_backlog(env):
     env.ai = {**env.ai, "work": "月の庭", "is_new_work": True, "kind": "次やる", "task": "会話イベントを書く 明日まで"}
     m = post(env, "次は会話イベントを書く。明日まで")
-    assert env.tasks == [("月の庭｜会話イベントを書く", {"scheduled": "", "due": "2026-09-21", "priority": "高", "source": env.sheet})]
+    assert env.tasks == [("月の庭｜会話イベントを書く 明日まで", {"scheduled": "", "due": "", "priority": "高", "source": env.sheet})]
     assert env.syncs == [1] and m.reactions == ["📝", "📋"] and env.sent == []
     env.ai = {**env.ai, "work": None, "is_new_work": False, "kind": "後回し", "task": "伏線の回収"}
     post(env, "伏線の回収は後回し")
