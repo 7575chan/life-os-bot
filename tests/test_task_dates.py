@@ -149,3 +149,15 @@ def test_describe_and_fmt():
     assert td.describe(date(2026, 9, 21), date(2026, 9, 30)) == "実行日 9/21(月)・期限 9/30(水)"
     assert td.describe(None, date(2026, 9, 30)) == "期限 9/30(水)"
     assert td.describe(None, None) == ""
+
+
+def test_leading_date_with_bar_and_due():
+    e = td.extract("10/18｜11/2までにラプラスのキャラシをする", date(2026, 10, 17))
+    assert (e.content, e.scheduled, e.due) == ("ラプラスのキャラシをする", date(2026, 10, 18), date(2026, 11, 2))
+    assert td.extract("10/18|キャラシ", date(2026, 10, 17)).content == "キャラシ"
+
+
+@pytest.mark.parametrize("text", ["2/3を推敲する", "1/2が終わったら次", "3/4と5/6を直す"])
+def test_fraction_like_numbers_are_not_dates(text):
+    e = td.extract(text, date(2026, 10, 17))
+    assert e.scheduled is None and e.due is None and e.content == text
