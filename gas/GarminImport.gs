@@ -10,7 +10,7 @@ var SOURCES = [
   {tab: 'Garmin', query: 'from:garmin.com (ウェルネスレポート OR フィットネスレポート)',
    parse: function (text, at, subject) { return parseGarmin_(text, at, subject); }},
   {tab: 'Habitify', query: 'from:weekly@insights.habitify.com',
-   parse: function (text, at, subject) { return parseHabitify_(text, at); }}
+   parse: function (text, at, subject, html) { return parseHabitifyMail_(text, at, subject, html); }}
 ];
 var MAX_THREADS = 100;  // 1回に見るメールのまとまりの数（最初の取り込みで多すぎると時間切れになるため）
 
@@ -36,7 +36,7 @@ function importSource_(src) {
       var id = msg.getId();
       if (done[id]) return;
       var at = msg.getDate();
-      var rows = src.parse(msg.getPlainBody(), at, msg.getSubject());
+      var rows = src.parse(msg.getPlainBody(), at, msg.getSubject(), msg.getBody());
       if (rows === null) return;  // 取り込まない種類のメール（月ごとのレポートなど）
       if (rows.length === 0) {
         console.warn('読み取れなかったメール: ' + msg.getSubject() + '（' + at + '）');
@@ -61,7 +61,7 @@ function debugMail() {
     if (threads.length === 0) { console.log(q[0] + ': メールが見つかりませんでした'); return; }
     var msg = threads[0].getMessages().pop();
     var text = msg.getPlainBody(), at = msg.getDate(), subject = msg.getSubject();
-    var rows = q[0] === 'Habitify' ? parseHabitify_(text, at) : parseGarmin_(text, at, subject);
+    var rows = q[0] === 'Habitify' ? parseHabitifyMail_(text, at, subject, msg.getBody()) : parseGarmin_(text, at, subject);
     console.log('==== ' + q[0] + ' ====\n件名: ' + subject + '\n取り出せた行: ' + (rows ? rows.length : '対象外')
                 + '\n本文の先頭:\n' + text.slice(0, 2500));
   });
@@ -202,4 +202,40 @@ function parseHabitify_(text, mailDate) {
     rows.push([start, '週', name + '・' + m[6], Number(m[5])]);
   }
   return rows.length > 1 || (rows.length === 1 && w) ? rows : [];
+}
+
+/** HTML → 文字（タグを消し、段落・セルの区切りを改行にする） */
+function htmlToText_(html) {
+  return String(html || '')
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<br\s*\/?>|<\/(p|div|td|tr|li|h\d|table|span)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(Number(n)); })
+    .split('\n').map(function (l) { return l.trim(); }).join('\n');
+}
+
+/**
+ * Habitify のメール → 行の配列。見た目つきの版（HTML）からは日数・合計まで、
+ * 文字だけの版（「• 本を読む: 29%」）からは完了率だけを読む。全体の達成率は本文か件名から
+ */
+function parseHabitifyMail_(text, mailDate, subject, html) {
+  var rows = parseHabitify_(htmlToText_(html), mailDate);
+  if (rows.some(function (r) { return /・日数$/.test(r[2]); })) return rows;
+  text = String(text).replace(/\r/g, '').replace(/[\u00a0\u3000]/g, ' ');
+  var start, m;
+  if ((m = text.match(/(\d{4})-(\d{2})-(\d{2})\s*-\s*\d{4}-\d{2}-\d{2}/))) {
+    start = m[1] + '-' + m[2] + '-' + m[3];
+  } else {
+    var d = new Date(mailDate.getFullYear(), mailDate.getMonth(), mailDate.getDate());
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7);  // 受信日の前の週の月曜
+    start = ymd_(d);
+  }
+  rows = [];
+  if ((m = (String(subject || '') + '\n' + text).match(/達成率は\s*([\d.]+)\s*%/))) rows.push([start, '週', '全体の達成率(%)', Number(m[1])]);
+  else if (/全ての習慣が未達成/.test(subject || '')) rows.push([start, '週', '全体の達成率(%)', 0]);
+  var part = text.split(/TOP PERFORMING HABITS/)[0];  // 上位の一覧は同じ習慣の繰り返しなので読まない
+  var re = /^\s*[•・*-]\s*(.+?)\s*[:：]\s*(\d+(?:\.\d+)?)\s*%\s*$/gm;
+  while ((m = re.exec(part))) rows.push([start, '週', m[1] + '・完了率(%)', Number(m[2])]);
+  return rows.some(function (r) { return /・完了率/.test(r[2]); }) ? rows : [];
 }

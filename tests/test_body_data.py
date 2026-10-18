@@ -141,3 +141,14 @@ def test_manual_section_is_written_by_code(monkeypatch):
     assert "まだデータが少ないため" in asyncio.run(health._body_numbers(END))[1]
     monkeypatch.setattr(config, "GARMIN_SHEET_ID", "")
     assert asyncio.run(health._body_numbers(END)) == ([], "")
+
+
+def test_habit_from_rate_when_days_are_missing():
+    """Habitify の文字だけのメールには完了率しか無い。日数が無い週は完了率で判断する。"""
+    ws = mondays(4)
+    habitify = recs([(ws[0], "週", "本を読む・完了率(%)", 29), (ws[1], "週", "本を読む・日数", 1),
+                     (ws[2], "週", "本を読む・完了率(%)", 0), (ws[3], "週", "本を読む・完了率(%)", 0),
+                     (ws[3], "週", "全体の達成率(%)", 0)])
+    lines = bd.analyze([], habitify, diary_for({ws[0]: 4, ws[1]: 4, ws[2]: 3, ws[3]: 2}), END)
+    assert lines == ["直近26週の傾向: 本を読むをした週のご機嫌度 4.0（2週） / しない週 2.5（2週）"]
+    assert bd.habit_names(habitify) == ["本を読む"]
