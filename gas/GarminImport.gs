@@ -9,7 +9,7 @@ var HEADER = ['日付', '期間', '項目', '値', '受信日時', 'メールID'
 var SOURCES = [
   {tab: 'Garmin', query: 'from:garmin.com (ウェルネスレポート OR フィットネスレポート)',
    parse: function (text, at) { return parseWellness_(text, at).concat(parseFitness_(text, at)); }},
-  {tab: 'Habitify', query: 'from:habitify 週次レポート', parse: function (text, at) { return parseHabitify_(text, at); }}
+  {tab: 'Habitify', query: 'habitify 週次レポート', parse: function (text, at) { return parseHabitify_(text, at); }}
 ];
 var MAX_THREADS = 100;  // 1回に見るメールのまとまりの数（最初の取り込みで多すぎると時間切れになるため）
 
@@ -28,7 +28,9 @@ function importSource_(src) {
   var sheet = sheet_(src.tab);
   var done = doneIds_(sheet);
   var out = [];
-  GmailApp.search(src.query, 0, MAX_THREADS).forEach(function (th) {
+  var threads = GmailApp.search(src.query, 0, MAX_THREADS);
+  console.log(src.tab + ': 見つかったメールのまとまり ' + threads.length + ' 件');
+  threads.forEach(function (th) {
     th.getMessages().forEach(function (msg) {
       var id = msg.getId();
       if (done[id]) return;
@@ -43,6 +45,21 @@ function importSource_(src) {
   });
   if (out.length) sheet.getRange(sheet.getLastRow() + 1, 1, out.length, HEADER.length).setValues(out);
   console.log(src.tab + ' に取り込んだ行: ' + out.length);
+}
+
+/**
+ * 読み取れないときの確認用（手で実行する）。いちばん新しい Habitify のメールの、送り主・件名・本文の先頭と、
+ * 取り出せた行の数を、実行ログに出す。シートには何も書かない
+ */
+function debugHabitify() {
+  var threads = GmailApp.search('habitify', 0, 5);
+  if (threads.length === 0) { console.log('「habitify」で探しても、メールが見つかりませんでした'); return; }
+  var msg = threads[0].getMessages().pop();
+  var text = msg.getPlainBody();
+  console.log('送り主: ' + msg.getFrom());
+  console.log('件名: ' + msg.getSubject());
+  console.log('本文の先頭:\n' + text.slice(0, 1500));
+  console.log('取り出せた行: ' + parseHabitify_(text, msg.getDate()).length);
 }
 
 /** 最初に1回だけ手で実行: 毎朝 7時台に importGarmin が動くようにする */
@@ -136,17 +153,26 @@ function parseFitness_(text, mailDate) {
 
 /** Habitify の週次レポート → 行の配列。全体の達成率・習慣ごとの完了率・できた日数・合計（分か回）*/
 function parseHabitify_(text, mailDate) {
-  var w = text.match(/(\d{1,2})月\s*(\d{1,2})\s*-\s*(\d{1,2})月\s*(\d{1,2})\s*\n\s*週次レポート/);
-  if (!w) return [];
-  var start = ymd_(dateNear_(Number(w[1]), Number(w[2]), mailDate));
+  text = String(text).replace(/\r/g, '').replace(/[\u00a0\u3000]/g, ' ');
+  // 週の初日: 「9月 14 - 9月 20」（無ければ、受信日の前の週の月曜）
+  var w = text.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日?\s*[-–—~〜]\s*(\d{1,2})\s*月\s*(\d{1,2})/);
+  var startDate;
+  if (w) {
+    startDate = dateNear_(Number(w[1]), Number(w[2]), mailDate);
+  } else {
+    startDate = new Date(mailDate.getFullYear(), mailDate.getMonth(), mailDate.getDate());
+    startDate.setDate(startDate.getDate() - ((startDate.getDay() + 6) % 7) - 7);
+  }
+  var start = ymd_(startDate);
   var rows = [], m;
-  if ((m = text.match(/全体の達成率は\s*([\d.]+)\s*%/))) rows.push([start, '週', '全体の達成率(%)', Number(m[1])]);
-  var re = /(\d+(?:\.\d+)?)%\s*\n\s*([^\n]+?)\s*\n\s*(\d+)\/(\d+)\s*日\s*\(\s*(\d+)\s*(分|回)\s*\)/g;
+  if ((m = text.match(/達成率は\s*([\d.]+)\s*%/))) rows.push([start, '週', '全体の達成率(%)', Number(m[1])]);
+  // 「29%」→ 習慣名 →「2/7 日 (10 分)」（間に空行やリンクの行があってもよい）
+  var re = /(\d+(?:\.\d+)?)\s*%[ \t]*\n(?:[ \t]*\n)*[ \t]*([^\n]+?)[ \t]*\n(?:[ \t]*\n)*[ \t]*(\d+)\s*\/\s*(\d+)\s*日\s*[(（]\s*(\d+)\s*(分|回)\s*[)）]/g;
   while ((m = re.exec(text))) {
-    var name = m[2];
+    var name = m[2].replace(/-icon$/, '').trim();
     rows.push([start, '週', name + '・完了率(%)', Number(m[1])]);
     rows.push([start, '週', name + '・日数', Number(m[3])]);
     rows.push([start, '週', name + '・' + m[6], Number(m[5])]);
   }
-  return rows;
+  return rows.length > 1 || (rows.length === 1 && w) ? rows : [];
 }
