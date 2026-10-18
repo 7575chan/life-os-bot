@@ -9,7 +9,7 @@ var HEADER = ['日付', '期間', '項目', '値', '受信日時', 'メールID'
 var SOURCES = [
   {tab: 'Garmin', query: 'from:garmin.com (ウェルネスレポート OR フィットネスレポート)',
    parse: function (text, at) { return parseWellness_(text, at).concat(parseFitness_(text, at)); }},
-  {tab: 'Habitify', query: 'habitify 週次レポート', parse: function (text, at) { return parseHabitify_(text, at); }}
+  {tab: 'Habitify', query: 'from:weekly@insights.habitify.com', parse: function (text, at) { return parseHabitify_(text, at); }}
 ];
 var MAX_THREADS = 100;  // 1回に見るメールのまとまりの数（最初の取り込みで多すぎると時間切れになるため）
 
@@ -52,8 +52,8 @@ function importSource_(src) {
  * 取り出せた行の数を、実行ログに出す。シートには何も書かない
  */
 function debugHabitify() {
-  var threads = GmailApp.search('habitify', 0, 5);
-  if (threads.length === 0) { console.log('「habitify」で探しても、メールが見つかりませんでした'); return; }
+  var threads = GmailApp.search('from:weekly@insights.habitify.com', 0, 5);
+  if (threads.length === 0) { console.log('weekly@insights.habitify.com からのメールが見つかりませんでした'); return; }
   var msg = threads[0].getMessages().pop();
   var text = msg.getPlainBody();
   console.log('送り主: ' + msg.getFrom());
