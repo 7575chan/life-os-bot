@@ -131,14 +131,33 @@ def _weeks(records: list[dict], first: date, end: date) -> dict[date, dict[str, 
     return out
 
 
+_HABIT_KEYS = ("・日数", "・完了率(%)")
+
+
+def _habit_of(item: str) -> str | None:
+    for suffix in _HABIT_KEYS:
+        if item.endswith(suffix):
+            return item[: -len(suffix)]
+    return None
+
+
 def habit_names(habitify: list[dict]) -> list[str]:
     """習慣の名前（最後に届いたレポートの順。それより前にしか無い習慣は、そのあとに）。"""
-    days = [r for r in habitify if r["item"].endswith("・日数")]
-    if not days:
+    rows = [r for r in habitify if _habit_of(r["item"])]
+    if not rows:
         return []
-    latest = max(r["date"] for r in days)
-    ordered = sorted(days, key=lambda r: (r["date"] != latest, r["order"]))
-    return list(dict.fromkeys(r["item"][: -len("・日数")] for r in ordered))
+    latest = max(r["date"] for r in rows)
+    ordered = sorted(rows, key=lambda r: (r["date"] != latest, r["order"]))
+    return list(dict.fromkeys(_habit_of(r["item"]) for r in ordered))
+
+
+def did_habit(items: dict[str, float], name: str) -> bool | None:
+    """その週にその習慣をしたか。日数があれば日数、無ければ完了率（メールの文字だけの版は完了率しか無い）。記録が無ければ None。"""
+    if f"{name}・日数" in items:
+        return items[f"{name}・日数"] > 0
+    if f"{name}・完了率(%)" in items:
+        return items[f"{name}・完了率(%)"] > 0
+    return None
 
 
 def analyze(garmin: list[dict], habitify: list[dict], diary: list[dict], end: date) -> list[str]:
@@ -171,7 +190,7 @@ def analyze(garmin: list[dict], habitify: list[dict], diary: list[dict], end: da
         if not (g_known or h_known):
             continue
         moved = any(k.endswith("・回数") and v > 0 for k, v in gi.items()) or \
-            any(hi.get(f"{name}・日数", 0) > 0 for name in config.HABITIFY_EXERCISE)
+            any(did_habit(hi, name) for name in config.HABITIFY_EXERCISE)
         g.setdefault(moved, []).append(wmood[w])
     if (s := _split(g)):
         lines.append(head_w + f"運動した週のご機嫌度 {s[0]}（{s[1]}週） / しない週 {s[2]}（{s[3]}週）")
@@ -194,9 +213,9 @@ def analyze(garmin: list[dict], habitify: list[dict], diary: list[dict], end: da
             continue
         g = {}
         for w, items in hw.items():
-            key = f"{name}・日数"
-            if key in items and w in wmood:
-                g.setdefault(items[key] > 0, []).append(wmood[w])
+            did = did_habit(items, name)
+            if did is not None and w in wmood:
+                g.setdefault(did, []).append(wmood[w])
         if (s := _split(g)):
             lines.append(head_w + f"{name}をした週のご機嫌度 {s[0]}（{s[1]}週） / しない週 {s[2]}（{s[3]}週）")
     return lines
