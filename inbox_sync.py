@@ -67,6 +67,13 @@ def plan(text: str, sheet_tasks: list[dict], snapshot: dict, today) -> InboxPlan
     lines = text.split("\n") if text else []
     by_id = {t["id"]: t for t in sheet_tasks if t.get("id")}
     taken = set(by_id)
+    # スナップショットとつながっていないシートのタスク（取り込みが途中で止まって二重になった分など）。
+    # 同じ文の行があれば、新しく足さずにそれを使う（未完了を優先）。
+    linked = {e.get("id") for e in snapshot.values()}
+    orphans: dict[str, list[dict]] = {}
+    for t_ in sorted(sheet_tasks, key=lambda x: (bool(x.get("deleted")), bool(x.get("done")))):
+        if t_.get("id") and t_["id"] not in linked:
+            orphans.setdefault(key(t_.get("content", "")), []).append(t_)
     new_snap: dict[str, dict] = {}
     adds: list[dict] = []
     updates: list[tuple[str, dict]] = []
@@ -79,6 +86,9 @@ def plan(text: str, sheet_tasks: list[dict], snapshot: dict, today) -> InboxPlan
             continue  # 同じ文の行は最初の1行だけ
         entry = snapshot.get(k) or {}
         s = by_id.get(entry.get("id", ""))
+        if s is None and orphans.get(k):
+            s = orphans[k].pop(0)
+            entry = {"id": s["id"], "scheduled": _iso(s.get("scheduled", ""))}  # 日付が違えばページが正
         if s is None:
             if t["done"]:
                 continue  # 最初から完了の行は取り込まない
@@ -103,17 +113,20 @@ def plan(text: str, sheet_tasks: list[dict], snapshot: dict, today) -> InboxPlan
                 final = ss
             else:  # ページで変えた（両方変わったときもページが正）
                 change["scheduled"] = fs
-        for field_, value in (("content", t["content"]), ("due", t["due"]), ("priority", t["priority"])):
-            if (s.get(field_) or "") != value:
-                change[field_] = value
+        if (s.get("content") or "") != t["content"]:
+            change["content"] = t["content"]
+        if _iso(s.get("due", "")) != t["due"]:
+            change["due"] = t["due"]
+        if (s.get("priority") or "") != t["priority"]:
+            change["priority"] = t["priority"]
         if change:
             updates.append((s["id"], change))
         new_snap[k] = {"id": s["id"], "scheduled": final}
-    for k, entry in snapshot.items():  # ページから消えた行
-        if k in new_snap:
-            continue
-        s = by_id.get(entry.get("id", ""))
-        if s and not s["done"] and not s.get("deleted"):
+    used = {e["id"] for e in new_snap.values()}
+    if not new_snap and not any(parse_line(x) for x in lines):  # 空で読めたとき（読み取りの失敗など）は消さない
+        return InboxPlan(text="\n".join(lines), adds=adds, updates=updates, snapshot=dict(snapshot))
+    for s in sheet_tasks:  # ページのどの行ともつながらない、未完了のタスク（消えた行・二重に取り込まれた分）
+        if s.get("id") and s["id"] not in used and not s["done"] and not s.get("deleted"):
             updates.append((s["id"], {"deleted": True}))
     return InboxPlan(text="\n".join(lines), adds=adds, updates=updates, snapshot=new_snap)
 

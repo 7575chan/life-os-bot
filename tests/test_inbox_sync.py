@@ -196,3 +196,31 @@ def test_failed_page_write_keeps_sheet_going_and_retries(monkeypatch, kv):
     st2 = Store(st.text)
     inbox_sync.run(st2, tasks)
     assert st2.writes == ["- [ ] 原稿 ⏳ 2026-10-20\n- [x] 電話\n"]
+
+
+def test_duplicates_from_an_interrupted_import_are_adopted_and_cleaned():
+    """最初の取り込みが途中で止まり、シートにだけ残ったタスク（スナップショットに無い）を使い直し、二重の分は削除にする。"""
+    tasks = [sheet("lo-old", "タンス黒の中身を整理する", scheduled="2026-10-21"),
+             sheet("lo-dup", "タンス黒の中身を整理する", scheduled="2026-10-21"),
+             sheet("lo-k", "開業届を検索する", scheduled="2026/10/17"),
+             sheet("lo-gone", "ページに無いタスク")]
+    text = "- [ ] タンス黒の中身を整理する ⏳ 2026-10-24 📅 2026-10-31\n- [x] 開業届を検索する ⏳ 2026-10-17 ✅ 2026-10-22"
+    p = inbox_sync.plan(text, tasks, {}, TODAY)
+    assert p.adds == []  # 新しく足さない
+    ups = dict(p.updates)
+    assert ups["lo-old"] == {"scheduled": "2026-10-24", "due": "2026-10-31"}
+    assert ups["lo-k"] == {"done": True, "done_date": "2026-10-22"}
+    assert ups["lo-dup"] == {"deleted": True} and ups["lo-gone"] == {"deleted": True}
+    assert p.snapshot["タンス黒の中身を整理する"]["id"] == "lo-old"
+
+
+def test_sheet_date_format_does_not_cause_endless_updates():
+    tasks = [sheet("lo-1", "原稿", scheduled="2026/10/20", due="2026/10/31")]
+    p = inbox_sync.plan("- [ ] 原稿 ⏳ 2026-10-20 📅 2026-10-31", tasks,
+                        {"原稿": {"id": "lo-1", "scheduled": "2026-10-20"}}, TODAY)
+    assert p.updates == [] and p.text == "- [ ] 原稿 ⏳ 2026-10-20 📅 2026-10-31"
+
+
+def test_empty_page_never_deletes():
+    p = inbox_sync.plan("", [sheet("lo-1", "原稿")], {"原稿": {"id": "lo-1", "scheduled": ""}}, TODAY)
+    assert p.updates == [] and p.snapshot == {"原稿": {"id": "lo-1", "scheduled": ""}}
